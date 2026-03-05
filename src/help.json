@@ -31,7 +31,13 @@
         "  end marker",
         "E3 (Knob 3): zoom",
         "  Shift: vertical",
-        "  scale (1x-32x)"
+        "  scale (1x-32x)",
+        "",
+        "Left/Right: nudge",
+        "  selection by one",
+        "  coarse step",
+        "Shift+L/R: jump by",
+        "  one selection length"
       ]
     },
     {
@@ -61,12 +67,31 @@
         "Shift+Pad: play",
         "  entire file",
         "",
-        "Loop button: toggle",
+        "Shift+Loop: toggle",
         "  loop mode on/off",
         "",
         "Header shows:",
         " * = unsaved changes",
         " L = loop enabled"
+      ]
+    },
+    {
+      "title": "Loop View",
+      "lines": [
+        "Loop: enter loop view",
+        "  (seam editor for",
+        "  seamless loops)",
+        "",
+        "E1: adjust loop point",
+        "E2: adjust loop end",
+        "E3: zoom seam view",
+        "  Shift: vert scale",
+        "Jog click: toggle",
+        "  loop point / end",
+        "",
+        "Shift+Loop: snap to",
+        "  zero crossing",
+        "Loop: return to edit"
       ]
     },
     {
@@ -86,8 +111,10 @@
         "E3: zoom  Shift: scale",
         "",
         "Modes: Even (fixed",
-        "  count) or Auto",
-        "  (transient detect)",
+        "  count), Auto",
+        "  (transient detect),",
+        "  or Lazy (real-time",
+        "  chop, SP-240 style)",
         "",
         "Pads: select + play",
         "  slice (hold to",
@@ -95,23 +122,46 @@
         "Left/Right: prev/next",
         "  slice",
         "Up/Down: scroll pad",
-        "  banks (>32 slices)",
+        "  banks (>32 slices)"
+      ]
+    },
+    {
+      "title": "Lazy Chop",
+      "lines": [
+        "In Slice mode, select",
+        "Lazy mode. Sub-modes:",
         "",
-        "Sample: export slices",
-        "  as WAVs, Drum Kit",
-        "  preset, or REX loop",
-        "Back: return to Edit"
+        "Chop: press Pad 1 to",
+        "  start playback.",
+        "  Press again to add",
+        "  chop points in",
+        "  real time. Playback",
+        "  ends at file end",
+        "  or press Capture.",
+        "",
+        "Play: audition slices",
+        "  with pads after",
+        "  chopping is done.",
+        "",
+        "Jog on Count toggles",
+        "  Chop / Play sub-mode."
       ]
     },
     {
       "title": "Saving",
       "lines": [
-        "Capture: save file",
+        "Sample: save file",
         "  (overwrite confirm)",
         "",
         "Shift+Capture: export",
         "  selection to a",
         "  new file",
+        "",
+        "In Slice mode, Sample",
+        "  offers: Slices,",
+        "  Drum Preset, or",
+        "  REX Loop (if Rex",
+        "  module installed)",
         "",
         "Back: exit (warns if",
         "  unsaved changes)"
