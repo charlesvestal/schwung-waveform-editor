@@ -876,6 +876,20 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         return;
     }
 
+    if (strcmp(key, "play_from") == 0) {
+        /* Start playback from an arbitrary frame position to end_sample.
+         * Used for previewing near the end marker without moving markers. */
+        if (!inst->audio_data || inst->audio_frames <= 0) return;
+        if (!val) return;
+        int pos = atoi(val);
+        if (pos < 0) pos = 0;
+        if (pos >= inst->audio_frames) pos = inst->audio_frames - 1;
+        inst->play_whole = 0;
+        inst->playing = 1;
+        inst->play_pos = pos;
+        return;
+    }
+
     if (strcmp(key, "stop") == 0) {
         inst->playing = 0;
         return;
