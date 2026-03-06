@@ -726,6 +726,25 @@ function refreshWaveform() {
 }
 
 /**
+ * Load a WAV file into the editor via DSP. Uses blocking set_param to ensure
+ * the file_path is delivered before querying file_info/waveform. In overtake
+ * mode the normal set_param is fire-and-forget and rapid writes can overwrite
+ * each other in the single shared-memory IPC slot.
+ */
+function loadFileIntoEditor(filePath) {
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("file_path", filePath, 2000);
+    } else {
+        host_module_set_param("file_path", filePath);
+    }
+    host_module_set_param("dirty", "1");
+    refreshFileInfo();
+    waveformDirty = true;
+    refreshWaveform();
+    refreshState();
+}
+
+/**
  * Mark waveform cache stale (call after destructive edits).
  */
 function invalidateWaveform() {
@@ -2976,11 +2995,7 @@ function handleCC(cc, value) {
                         announce(oDirName + ", " + oFirst);
                     } else if (result.action === "select") {
                         openedFilePath = result.value;
-                        host_module_set_param("file_path", result.value);
-                        refreshFileInfo();
-                        waveformDirty = true;
-                        refreshWaveform();
-                        refreshState();
+                        loadFileIntoEditor(result.value);
                         openFileBrowserState = null;
                         announce("Loaded " + fileName);
                         switchView(VIEW_TRIM);
@@ -3360,17 +3375,15 @@ globalThis.tick = function() {
     if (recordState === "stopping") {
         recordStoppingTicks++;
         if (typeof host_sampler_is_recording === "function" && !host_sampler_is_recording()) {
-            /* Sampler finished — load the recorded file */
+            /* Sampler finished — load the recorded file.
+             * Use blocking set_param to ensure the DSP processes file_path
+             * before we query file_info/waveform. In overtake mode, normal
+             * set_param is fire-and-forget and can be overwritten by
+             * subsequent writes to the single shared-memory IPC slot. */
             recordState = "idle";
             openedFilePath = recordFilePath;
             isRecordedFile = true;
-            host_module_set_param("file_path", "");
-            host_module_set_param("file_path", recordFilePath);
-            host_module_set_param("dirty", "1");
-            refreshFileInfo();
-            waveformDirty = true;
-            refreshWaveform();
-            refreshState();
+            loadFileIntoEditor(recordFilePath);
             announce("Loaded " + fileName);
             showStatus("Recorded " + fileName, 90);
         } else if (recordStoppingTicks > 220) {
@@ -3378,13 +3391,7 @@ globalThis.tick = function() {
             recordState = "idle";
             openedFilePath = recordFilePath;
             isRecordedFile = true;
-            host_module_set_param("file_path", "");
-            host_module_set_param("file_path", recordFilePath);
-            host_module_set_param("dirty", "1");
-            refreshFileInfo();
-            waveformDirty = true;
-            refreshWaveform();
-            refreshState();
+            loadFileIntoEditor(recordFilePath);
             showStatus("Recorded " + fileName, 90);
         }
     }
