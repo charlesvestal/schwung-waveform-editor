@@ -476,9 +476,6 @@ function getKnobLabel(knobIndex) {
         if (currentView === VIEW_TRIM || currentView === VIEW_LOOP) return shiftHeld ? "E:" + endSample : "End:" + formatTime(endSample);
         if (currentView === VIEW_SLICE) return "End:" + formatTime(sliceBoundaries[selectedSlice + 1]);
     } else if (knobIndex === 2) {
-        if (shiftHeld && (currentView === VIEW_TRIM || currentView === VIEW_LOOP || currentView === VIEW_SLICE)) {
-            return "Scale:" + vScale.toFixed(1) + "x";
-        }
         if (currentView === VIEW_TRIM || currentView === VIEW_SLICE) {
             if (zoomLevel <= 0) return "Zoom: Full";
             return "Zoom:" + Math.pow(2, zoomLevel).toFixed(1) + "x";
@@ -487,6 +484,11 @@ function getKnobLabel(knobIndex) {
             return "Zoom:" + Math.pow(2, seamZoomLevel).toFixed(1) + "x";
         }
     } else if (knobIndex === 3) {
+        return "Scale:" + vScale.toFixed(1) + "x";
+    } else if (knobIndex === 4) {
+        if (currentView === VIEW_SLICE && sliceMode === SLICE_MODE_AUTO) {
+            return "T:" + sliceThreshold.toFixed(1);
+        }
         if (currentView === VIEW_TRIM || currentView === VIEW_LOOP) {
             return shiftHeld ? "Normalize" : "Gain:" + formatDb(gainDb);
         }
