@@ -2018,9 +2018,10 @@ function selectRecSource() {
     }
 
     if (selected.id === recSourceActiveId) {
-        /* Already loaded — switch to its UI */
-        host_source_show_ui();
+        /* Already loaded — go back to editor, auto-record when audio flows */
         recSourceWaitingForAudio = true;
+        switchView(VIEW_TRIM);
+        showStatus("Source: " + (selected.abbrev || selected.id) + " ready", 90);
         return;
     }
 
@@ -2032,9 +2033,9 @@ function selectRecSource() {
     if (ok) {
         recSourceActiveId = selected.id;
         recSourceActiveAbbrev = selected.abbrev || "";
-        /* Switch to source plugin's UI for setup */
-        host_source_show_ui();
         recSourceWaitingForAudio = true;
+        switchView(VIEW_TRIM);
+        showStatus("Loaded " + selected.name + " — waiting for audio", 120);
     } else {
         showStatus("Failed to load " + selected.name, 90);
         switchView(VIEW_TRIM);
