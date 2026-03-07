@@ -78,6 +78,7 @@ var VIEW_LOOP = 6;
 var VIEW_CONFIRM_SAVE = 7;
 var VIEW_OPEN_FILE = 8;
 var VIEW_SLICE = 9;
+var VIEW_REC_SOURCE = 10;
 
 /* MIDI CCs — use shared constants */
 var CC_JOG = MoveMainKnob;
@@ -226,7 +227,7 @@ var REX_ENCODE_BIN = REX_MODULE_PATH + "/rex-encode";
 var REX_LOOPS_DIR = REX_MODULE_PATH + "/loops";
 
 /* Mode menu */
-var menuItems = ["Edit", "Loop", "Open File", "Exit Editor"];
+var menuItems = ["Edit", "Loop", "Open File", "Save", "Rec Source", "Exit Editor"];
 var menuIndex = 0;
 
 /* Open File browser state */
@@ -255,6 +256,14 @@ var saveItemsNormal = ["Overwrite", "Cancel"];
 var saveItems = saveItemsNormal;
 var saveIndex = 0;
 var saveReturnView = VIEW_TRIM; /* View to return to after save/cancel */
+
+/* Rec Source picker state */
+var recSourceModules = [];      /* [{id, name, abbrev, rec_source}, ...] */
+var recSourceIndex = 0;         /* Selected index in picker */
+var recSourceActiveId = null;   /* Currently loaded source module ID */
+var recSourceActiveAbbrev = ""; /* Abbreviation for display */
+var pendingRecSourceOpen = false; /* Flag to open picker after save */
+var recSourceWaitingForAudio = false; /* Waiting for source to produce audio before auto-record */
 
 /**
  * Generate a timestamped recording filename.
@@ -1175,12 +1184,33 @@ function drawTrimView() {
         recordWaveform.push(peak);
         recordWriteHead++;
 
-        /* Header: REC + elapsed time + debug peak value */
+        /* Header: REC + elapsed time */
         var elapsed = (Date.now() - recordStartTime) / 1000;
         var mins = Math.floor(elapsed / 60);
         var secs = elapsed % 60;
         var timeStr = mins + ":" + (secs < 10 ? "0" : "") + secs.toFixed(1);
-        print(0, 0, "REC  " + timeStr, 1);
+
+        if (recSourceActiveId) {
+            /* Draw 2px VU meter for rec source */
+            var level = 0;
+            if (typeof host_source_get_level === "function") {
+                level = host_source_get_level();
+            }
+            var meterH = Math.round(level * 7);
+            if (meterH > 0) {
+                fill_rect(1, 2 + (7 - meterH), 2, meterH, 1);
+            }
+
+            /* Flashing "REC:[XX]" label */
+            var recShow = (recordLedCounter % 30) < 20;
+            var recLabel = recShow ? ("REC:[" + recSourceActiveAbbrev + "]") : "";
+            print(5, 2, recLabel, 1);
+
+            /* Elapsed time on right side */
+            print(128 - (timeStr.length * 6) - 2, 2, timeStr, 1);
+        } else {
+            print(0, 0, "REC  " + timeStr, 1);
+        }
         drawDivider(10);
 
         /* Draw live waveform with write head.
@@ -1230,14 +1260,27 @@ function drawTrimView() {
     var durX = SCREEN_W - durStr.length * 6;
     print(durX, 0, durStr, 1);
 
+    /* Show paused source indicator when source is connected but idle */
+    if (recSourceActiveId && recordState === "idle" && !recSourceWaitingForAudio) {
+        var pauseLabel = "[" + recSourceActiveAbbrev + "]||";
+        print(128 - (pauseLabel.length * 6) - 2, 2, pauseLabel, 1);
+    }
+
     /* Top divider */
     drawDivider(10);
 
-    /* Waveform area */
-    drawWaveform();
+    /* Show waiting-for-audio indicator in waveform area */
+    if (recSourceWaitingForAudio && recordState === "idle") {
+        draw_line(0, WAVE_MID, SCREEN_W - 1, WAVE_MID, 1);
+        printCentered(WAVE_MID - 4, "Waiting for audio...");
+        drawDivider(WAVE_Y_BOT + 1);
+    } else {
+        /* Waveform area */
+        drawWaveform();
 
-    /* Bottom divider */
-    drawDivider(WAVE_Y_BOT + 1);
+        /* Bottom divider */
+        drawDivider(WAVE_Y_BOT + 1);
+    }
 
     /* Footer: active status (centered) or marker positions */
     var footerStatus = getActiveStatus();
@@ -1513,19 +1556,25 @@ function drawModeMenu() {
     print(0, 0, "WAVEFORM EDITOR", 1);
     drawDivider(10);
 
-    /* Menu items */
-    var itemH = 12;
-    var startY = 14;
+    /* Menu items — scroll if needed */
+    var itemH = 9;
+    var startY = 12;
+    var footerH = 10;
+    var maxVisible = Math.floor((SCREEN_H - startY - footerH) / itemH);
+    var scrollTop = 0;
+    if (menuIndex >= maxVisible) {
+        scrollTop = menuIndex - maxVisible + 1;
+    }
 
-    for (var i = 0; i < menuItems.length; i++) {
-        var y = startY + i * itemH;
-        if (y + itemH > SCREEN_H) break;
+    for (var vi = 0; vi < maxVisible && (scrollTop + vi) < menuItems.length; vi++) {
+        var idx = scrollTop + vi;
+        var y = startY + vi * itemH;
 
-        if (i === menuIndex) {
+        if (idx === menuIndex) {
             fill_rect(0, y, SCREEN_W, itemH, 1);
-            print(4, y + 2, menuItems[i], 0);
+            print(4, y + 1, menuItems[idx], 0);
         } else {
-            print(4, y + 2, menuItems[i], 1);
+            print(4, y + 1, menuItems[idx], 1);
         }
     }
 
@@ -1692,6 +1741,8 @@ function switchView(view) {
     } else if (view === VIEW_CONFIRM_SAVE) {
         var savePrompt = (saveReturnView === VIEW_SLICE) ? "Save slices as? " : "Overwrite? ";
         announce(savePrompt + saveItems[saveIndex]);
+    } else if (view === VIEW_REC_SOURCE) {
+        announce("Rec Source");
     }
 }
 
@@ -1709,7 +1760,18 @@ function menuSelect() {
         case 2: /* Open File */
             enterOpenFileBrowser();
             break;
-        case 3: /* Exit Editor */
+        case 3: /* Save */
+            if (currentView === VIEW_MODE_MENU) {
+                saveItems = saveItemsNormal;
+                saveIndex = 0;
+                saveReturnView = VIEW_TRIM;
+                switchView(VIEW_CONFIRM_SAVE);
+            }
+            break;
+        case 4: /* Rec Source */
+            openRecSourcePicker();
+            break;
+        case 5: /* Exit Editor */
             attemptExit();
             break;
     }
@@ -1853,6 +1915,11 @@ function saveSelect() {
  * just restore the view and refresh display.
  */
 function returnToSaveView() {
+    if (pendingRecSourceOpen) {
+        pendingRecSourceOpen = false;
+        openRecSourcePicker();
+        return;
+    }
     if (saveReturnView === VIEW_SLICE) {
         currentView = VIEW_SLICE;
         selectSlice(selectedSlice);
@@ -1861,6 +1928,116 @@ function returnToSaveView() {
         updateSlicePadLeds();
     } else {
         switchView(saveReturnView);
+    }
+}
+
+/* ============ Rec Source Picker ============ */
+
+/**
+ * Discover available rec source modules from the host.
+ */
+function refreshRecSourceModules() {
+    recSourceModules = [];
+    if (typeof host_list_modules === "function") {
+        var modules = host_list_modules();
+        for (var i = 0; i < modules.length; i++) {
+            if (modules[i].rec_source) {
+                recSourceModules.push(modules[i]);
+            }
+        }
+    }
+    recSourceModules.push({ id: null, name: "None", abbrev: "" });
+}
+
+/**
+ * Draw the rec source picker overlay.
+ */
+function drawRecSourcePicker() {
+    clear_screen();
+    print(2, 2, "Rec Source", 1);
+    drawDivider(10);
+
+    var startY = 14;
+    var itemH = 10;
+    for (var i = 0; i < recSourceModules.length; i++) {
+        var y = startY + i * itemH;
+        if (y > 50) break;
+
+        var mod = recSourceModules[i];
+        var label = mod.name;
+        var isActive = (mod.id === recSourceActiveId);
+        var isSelected = (i === recSourceIndex);
+
+        if (isSelected) {
+            fill_rect(0, y - 1, 128, itemH, 1);
+            if (isActive) print(2, y, "\x10", 0);
+            print(isActive ? 12 : 2, y, label, 0);
+        } else {
+            if (isActive) print(2, y, "\x10", 1);
+            print(isActive ? 12 : 2, y, label, 1);
+        }
+    }
+
+    drawDivider(55);
+    print(2, 57, "Jog:select  Back:cancel", 1);
+}
+
+/**
+ * Open the rec source picker overlay.
+ */
+function openRecSourcePicker() {
+    refreshRecSourceModules();
+    recSourceIndex = 0;
+    for (var i = 0; i < recSourceModules.length; i++) {
+        if (recSourceModules[i].id === recSourceActiveId) {
+            recSourceIndex = i;
+            break;
+        }
+    }
+    switchView(VIEW_REC_SOURCE);
+    announce("Rec Source picker");
+}
+
+/**
+ * Confirm rec source selection.
+ */
+function selectRecSource() {
+    var selected = recSourceModules[recSourceIndex];
+
+    if (selected.id === null) {
+        /* "None" selected — disconnect */
+        if (recSourceActiveId) {
+            host_source_unload();
+            recSourceActiveId = null;
+            recSourceActiveAbbrev = "";
+            recSourceWaitingForAudio = false;
+        }
+        switchView(VIEW_TRIM);
+        showStatus("Source disconnected", 60);
+        return;
+    }
+
+    if (selected.id === recSourceActiveId) {
+        /* Already loaded — switch to its UI */
+        host_source_show_ui();
+        recSourceWaitingForAudio = true;
+        return;
+    }
+
+    /* Load new source */
+    if (recSourceActiveId) {
+        host_source_unload();
+    }
+    var ok = host_source_load(selected.id);
+    if (ok) {
+        recSourceActiveId = selected.id;
+        recSourceActiveAbbrev = selected.abbrev || "";
+        /* Switch to source plugin's UI for setup */
+        host_source_show_ui();
+        recSourceWaitingForAudio = true;
+    } else {
+        showStatus("Failed to load " + selected.name, 90);
+        switchView(VIEW_TRIM);
     }
 }
 
@@ -2499,7 +2676,11 @@ function handleCC(cc, value) {
                 switchView(VIEW_TRIM);
                 break;
             case VIEW_CONFIRM_SAVE:
+                pendingRecSourceOpen = false;
                 switchView(saveReturnView);
+                break;
+            case VIEW_REC_SOURCE:
+                switchView(VIEW_TRIM);
                 break;
             case VIEW_OPEN_FILE:
                 if (openFileBrowserState && openFileBrowserState.currentDir !== openFileBrowserState.root) {
@@ -2601,6 +2782,13 @@ function handleCC(cc, value) {
 
     /* REC button — start/stop recording */
     if (cc === CC_REC && value > 0) {
+        /* REC pressed with paused source — resume and wait for audio */
+        if (recSourceActiveId && recordState === "idle" && !recSourceWaitingForAudio) {
+            if (typeof host_source_resume === "function") host_source_resume();
+            recSourceWaitingForAudio = true;
+            showStatus("Resuming " + recSourceActiveAbbrev + "...", 60);
+            return;
+        }
         if (recordState === "ready") {
             /* Ensure parent directory exists */
             if (typeof host_ensure_dir === "function") {
@@ -2620,6 +2808,10 @@ function handleCC(cc, value) {
             recordWaveform = null;
             setButtonLED(CC_REC, LED_OFF);
             showStatus("Saving...", 90);
+            /* Pause rec source when recording stops */
+            if (recSourceActiveId && typeof host_source_pause === "function") {
+                host_source_pause();
+            }
         }
         return;
     }
@@ -2654,19 +2846,21 @@ function handleCC(cc, value) {
         return;
     }
 
-    /* Sample button — save with confirmation/options. */
+    /* Sample button — open rec source picker (save moved to mode menu). */
     if (cc === CC_SAMPLE && value > 0) {
-        if (currentView === VIEW_TRIM || currentView === VIEW_LOOP) {
+        if (currentView === VIEW_REC_SOURCE) return;
+
+        /* If dirty, prompt save first, then open picker */
+        if (dirty) {
             saveItems = saveItemsNormal;
             saveIndex = 0;
             saveReturnView = currentView;
+            pendingRecSourceOpen = true;
             switchView(VIEW_CONFIRM_SAVE);
-        } else if (currentView === VIEW_SLICE) {
-            saveItems = getSaveItemsSlice();
-            saveIndex = 0;
-            saveReturnView = currentView;
-            switchView(VIEW_CONFIRM_SAVE);
+            return;
         }
+
+        openRecSourcePicker();
         return;
     }
 
@@ -2824,6 +3018,13 @@ function handleCC(cc, value) {
                 announce(saveItems[saveIndex]);
                 break;
 
+            case VIEW_REC_SOURCE:
+                recSourceIndex += delta;
+                if (recSourceIndex < 0) recSourceIndex = 0;
+                if (recSourceIndex >= recSourceModules.length) recSourceIndex = recSourceModules.length - 1;
+                announce(recSourceModules[recSourceIndex].name);
+                break;
+
             case VIEW_TRIM:
                 /* Adjust selected marker: shift = 1 sample, normal = coarse */
                 adjustMarker(selectedField, shiftHeld ? delta : delta * getCoarseStep());
@@ -2945,6 +3146,10 @@ function handleCC(cc, value) {
 
             case VIEW_CONFIRM_SAVE:
                 saveSelect();
+                break;
+
+            case VIEW_REC_SOURCE:
+                selectRecSource();
                 break;
 
             case VIEW_TRIM:
@@ -3371,6 +3576,26 @@ globalThis.tick = function() {
         }
     }
 
+    /* Monitor rec source for auto-start recording */
+    if (recSourceActiveId && recSourceWaitingForAudio && recordState === "idle") {
+        if (typeof host_source_is_active === "function" && host_source_is_active()) {
+            /* Source started producing audio — auto-start recording */
+            var recDir = "/data/UserData/UserLibrary/Samples/Move Everything/Resampler";
+            if (typeof host_ensure_dir === "function") host_ensure_dir(recDir);
+            recordBrowserDir = recDir;
+            recordFilePath = generateRecordingPath(recDir);
+            host_sampler_start(recordFilePath);
+            recordStartTime = Date.now();
+            recordState = "recording";
+            recordWaveform = [];
+            recordWriteHead = 0;
+            isRecordedFile = true;
+            recSourceWaitingForAudio = false;
+            setButtonLED(CC_REC, BrightRed);
+            announce("Recording from " + recSourceActiveAbbrev);
+        }
+    }
+
     /* Poll for sampler finalization after recording stop */
     if (recordState === "stopping") {
         recordStoppingTicks++;
@@ -3465,6 +3690,8 @@ globalThis.tick = function() {
         if (recordLedCounter % 15 === 0) {
             setButtonLED(CC_REC, (recordLedCounter % 30 < 15) ? BrightRed : LED_OFF);
         }
+    } else if (recordState === "recording") {
+        recordLedCounter++;
     }
 
     /* Draw current view */
@@ -3492,6 +3719,9 @@ globalThis.tick = function() {
             break;
         case VIEW_SLICE:
             drawSliceView();
+            break;
+        case VIEW_REC_SOURCE:
+            drawRecSourcePicker();
             break;
     }
 };
