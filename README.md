@@ -5,7 +5,8 @@ A full-featured audio waveform editor for your Ableton Move. Trim, gain adjust, 
 ## Features
 
 - Waveform display with zoom and minimap overview
-- Start/end marker selection with jog and knobs
+- Start/end marker selection with knobs
+- Jog wheel scrolls waveform view when zoomed in
 - Real-time gain adjustment and normalization
 - Cut, copy, paste, and mute operations
 - Hold-to-audition playback with loop mode
@@ -39,8 +40,8 @@ cd move-anything-waveform-editor
 
 | Control | Function |
 |---------|----------|
-| Jog wheel | Move selected marker |
-| Jog click | Toggle start/end marker |
+| Jog wheel | Scroll view when zoomed in (Shift: fine scroll) |
+| Jog click | Menu navigation only |
 | Knob 1 | Move start marker |
 | Knob 2 | Move end marker |
 | Knob 3 | Zoom (Shift: vertical scale) |

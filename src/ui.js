@@ -14,8 +14,8 @@
  * count. decodeDelta() returns the signed count for proportional response.
  *
  * Controls:
- *   Jog wheel    - Scroll view (zoomed) / Move marker (unzoomed)  |  Menu: navigate
- *   Jog click    - Toggle start/end field |  Menu: select item
+ *   Jog wheel    - Scroll view (zoomed, clamped to file bounds)  |  Menu: navigate
+ *   Jog click    - Menu: select item
  *   E1 (Knob 1)  - Move start marker
  *   E2 (Knob 2)  - Move end marker
  *   E3 (Knob 3)  - Zoom in/out  |  Shift: vertical scale (1x-32x)
@@ -3325,12 +3325,6 @@ function handleCC(cc, value) {
 
             case VIEW_CONFIRM_SAVE:
                 saveSelect();
-                break;
-
-            case VIEW_TRIM:
-                /* Toggle selected field */
-                selectedField = selectedField === 0 ? 1 : 0;
-                showStatus(selectedField === 0 ? "Start" : "End", 30);
                 break;
 
             case VIEW_LOOP:

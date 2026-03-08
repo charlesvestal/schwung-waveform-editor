@@ -19,11 +19,10 @@
     {
       "title": "Navigation",
       "lines": [
-        "Jog: move selected",
-        "  marker (start/end)",
-        "Jog click: toggle",
-        "  between start and",
-        "  end markers",
+        "Jog (zoomed): scroll",
+        "  through waveform",
+        "  (clamped to file)",
+        "Shift+Jog: fine scroll",
         "",
         "E1 (Knob 1): move",
         "  start marker",
