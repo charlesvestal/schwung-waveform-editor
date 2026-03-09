@@ -8,18 +8,18 @@ External tool module for Move Everything. Full audio waveform editor with trim, 
 src/
   module.json       # Module metadata (component_type: "tool", interactive)
   ui.js             # QuickJS UI (waveform display, markers, editing)
-  dsp.so            # Audio DSP plugin (pre-built ARM64)
+  dsp/plugin.c      # Audio DSP plugin source (cross-compiled to ARM64)
   help.json         # On-device help content
 ```
 
 ## Build & Deploy
 
 ```bash
-./scripts/build.sh        # Package to dist/waveform-editor/
+./scripts/build.sh        # Cross-compile DSP + package to dist/waveform-editor/
 ./scripts/install.sh      # Deploy to Move device
 ```
 
-No cross-compilation needed — ships pre-built binaries.
+Requires `aarch64-linux-gnu-gcc` cross-compiler (set `CROSS_PREFIX` to override).
 
 ## Release
 
