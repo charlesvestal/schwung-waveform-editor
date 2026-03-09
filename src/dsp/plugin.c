@@ -15,6 +15,8 @@
 #include <stdint.h>
 #include <math.h>
 #include <time.h>
+#include <unistd.h>
+#include <pwd.h>
 
 /* ============================================================================
  * Plugin API definitions (inlined to avoid path issues during cross-compile)
@@ -453,6 +455,13 @@ static int load_wav(instance_t *inst, const char *path) {
  * out_channels: 1=mono (uses L channel), 2=stereo.
  * Returns 0 on success, -1 on error.
  */
+/* Chown file to ableton user so Move's UI can see it.
+ * The shim runs as root but Move's UI runs as ableton. */
+static void chown_to_ableton(const char *path) {
+    struct passwd *pw = getpwnam("ableton");
+    if (pw) chown(path, pw->pw_uid, pw->pw_gid);
+}
+
 static int write_wav(const char *path, const int16_t *data, int num_frames,
                      int sample_rate, uint16_t out_fmt, uint16_t out_bits,
                      uint16_t out_channels) {
@@ -531,6 +540,7 @@ static int write_wav(const char *path, const int16_t *data, int num_frames,
         plugin_log(log_buf);
     }
 
+    chown_to_ableton(path);
     return 0;
 }
 
