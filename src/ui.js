@@ -2057,7 +2057,14 @@ function selectRecSource() {
         return;
     }
 
-    /* Load new source */
+    /* Load new source — hand off to source plugin UI */
+    if (typeof host_launch_source_ui === "function") {
+        host_launch_source_ui(selected.id);
+        /* Wave Edit will be unloaded and reloaded after user configures the source */
+        return;
+    }
+
+    /* Fallback: load DSP directly (no UI handoff available) */
     if (recSourceActiveId) {
         host_source_unload();
     }
@@ -3610,6 +3617,14 @@ globalThis.init = function() {
         openRecSourcePicker();
     } else {
         announce("Wave Edit, " + (fileName || "no file") + ", " + formatTime(totalFrames));
+    }
+
+    /* Check if a rec source is already active (returned from source UI handoff) */
+    if (typeof host_source_is_loaded === "function" && host_source_is_loaded()) {
+        recSourceActiveId = (typeof host_source_get_id === "function") ? host_source_get_id() : "unknown";
+        recSourceActiveAbbrev = (typeof host_source_get_abbrev === "function") ? host_source_get_abbrev() : "";
+        recSourceWaitingForAudio = true;
+        showStatus("Waiting for audio from " + recSourceActiveAbbrev, 120);
     }
 };
 
