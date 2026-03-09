@@ -2278,12 +2278,14 @@ function exportSlicedWavs() {
         syncMarkersToDs();
         host_module_get_param("dirty"); /* sync barrier */
 
-        /* Trigger export — DSP writes to <baseName>_edit.wav in the sample dir */
+        /* Trigger export — DSP writes timestamped file, returns name in copy_result */
         host_module_set_param("export", "1");
         var result = host_module_get_param("copy_result");
 
-        /* The exported file is always <sampleDir>/<baseName>_edit.wav */
-        var editPath = sampleDir + "/" + baseName + "_edit.wav";
+        if (!result || result === "ERROR") continue;
+
+        /* copy_result is the basename of the exported file (e.g. "sample_edit_0309_0853.wav") */
+        var editPath = sampleDir + "/" + result;
         var sliceName = baseName + "_s" + (i + 1) + ".wav";
         var targetPath = sliceDir + "/" + sliceName;
 
@@ -2337,16 +2339,21 @@ function exportRexLoop() {
     syncMarkersToDs();
     host_module_get_param("dirty"); /* sync barrier */
     host_module_set_param("export", "1");
-    host_module_get_param("copy_result");
+    var exportResult = host_module_get_param("copy_result");
 
     /* Restore markers */
     startSample = savedStart;
     endSample = savedEnd;
     syncMarkersToDs();
 
+    if (!exportResult || exportResult === "ERROR") {
+        showStatus("Export failed", 60);
+        return;
+    }
+
     var baseName = fileName.replace(/\.wav$/i, "");
     var sampleDir = openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
-    var editPath = sampleDir + "/" + baseName + "_edit.wav";
+    var editPath = sampleDir + "/" + exportResult;
     var rx2Path = REX_LOOPS_DIR + "/" + baseName + ".rx2";
 
     /* Ensure loops directory exists */
