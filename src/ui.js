@@ -309,6 +309,23 @@ function isScratchFile() {
     return openedFilePath === SCRATCH_PATH;
 }
 
+function nameMatchesCurrent() {
+    var targetName = saveName;
+    if (targetName.toLowerCase().indexOf(".wav") !== targetName.length - 4) {
+        targetName = targetName + ".wav";
+    }
+    return targetName === fileName;
+}
+
+function leafFolder(path) {
+    if (!path) return "";
+    var lastSlash = path.lastIndexOf("/");
+    if (lastSlash <= 0) return path;
+    var dir = path.substring(0, lastSlash);
+    var leaf = dir.substring(dir.lastIndexOf("/") + 1);
+    return leaf;
+}
+
 function isRexAvailable() {
     return (typeof host_file_exists === "function") &&
         host_file_exists(REX_MODULE_PATH + "/module.json");
@@ -1866,15 +1883,20 @@ function ensureSourceSaved() {
     if (targetName.toLowerCase().indexOf(".wav") !== targetName.length - 4) {
         targetName = targetName + ".wav";
     }
-    var destPath = SAVE_DIR + "/" + targetName;
+    /* Scratch files go to SAVE_DIR; existing files stay in their folder */
+    var destDir = isScratchFile()
+        ? SAVE_DIR
+        : openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
+    var destPath = destDir + "/" + targetName;
+    /* Apply pending edits (gain etc) */
+    if (gainDb !== 0.0) {
+        host_module_set_param("apply_gain", "1");
+    }
+    host_module_set_param("save", "1");
     if (isScratchFile() || openedFilePath !== destPath) {
+        /* Name changed or scratch — copy to new path */
         if (typeof host_system_cmd === "function") {
-            host_ensure_dir(SAVE_DIR);
-            /* Save current edits first (apply gain etc) */
-            if (gainDb !== 0.0) {
-                host_module_set_param("apply_gain", "1");
-            }
-            host_module_set_param("save", "1");
+            host_ensure_dir(destDir);
             var result = host_system_cmd("cp '" + openedFilePath + "' '" + destPath + "'");
             if (result === 0) {
                 openedFilePath = destPath;
@@ -1886,6 +1908,11 @@ function ensureSourceSaved() {
         }
         return "";
     }
+    /* Same name, same path — already saved in place */
+    isRecordedFile = false;
+    refreshState();
+    refreshFileInfo();
+    invalidateWaveform();
     return destPath;
 }
 
@@ -1898,7 +1925,11 @@ function checkOverwriteThenDo(action) {
     if (targetName.toLowerCase().indexOf(".wav") !== targetName.length - 4) {
         targetName = targetName + ".wav";
     }
-    var destPath = SAVE_DIR + "/" + targetName;
+    /* Match destDir logic from ensureSourceSaved */
+    var destDir = isScratchFile()
+        ? SAVE_DIR
+        : openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
+    var destPath = destDir + "/" + targetName;
     /* If saving to same file we already have open, no overwrite prompt needed */
     if (destPath === openedFilePath) {
         action();
@@ -1941,48 +1972,31 @@ function saveSelect() {
     var action = saveActions[saveIndex - 1];
     if (action === "Save") {
         checkOverwriteThenDo(function() {
-            if (isScratchFile()) {
-                /* Save scratch to permanent path */
-                var path = ensureSourceSaved();
-                if (path) {
-                    showStatus("Saved!", 90);
-                    announce("Saved");
-                } else {
-                    showStatus("Save failed", 60);
-                }
+            var path = ensureSourceSaved();
+            if (path) {
+                var folder = leafFolder(path);
+                showStatus("Saved to " + folder, 90);
+                announce("Saved to " + folder);
             } else {
-                /* Just save in place */
-                doSave();
+                showStatus("Save failed", 60);
             }
             returnToSaveView();
         });
     } else if (action === "Slices") {
-        checkOverwriteThenDo(function() {
-            if (isScratchFile()) {
-                var path = ensureSourceSaved();
-                if (!path) { showStatus("Save failed", 60); returnToSaveView(); return; }
-            }
-            exportSlicedWavs();
-            returnToSaveView();
-        });
+        exportSlicedWavs(saveName);
+        returnToSaveView();
     } else if (action === "Drum Preset") {
         checkOverwriteThenDo(function() {
-            if (isScratchFile()) {
-                var path = ensureSourceSaved();
-                if (!path) { showStatus("Save failed", 60); returnToSaveView(); return; }
-            }
-            saveDrumRackPreset();
+            var wasScratch = isScratchFile();
+            var nameChanged = !nameMatchesCurrent();
+            var path = ensureSourceSaved();
+            if (!path) { showStatus("Save failed", 60); returnToSaveView(); return; }
+            saveDrumRackPreset(wasScratch || nameChanged);
             returnToSaveView();
         });
     } else if (action === "REX Loop") {
-        checkOverwriteThenDo(function() {
-            if (isScratchFile()) {
-                var path = ensureSourceSaved();
-                if (!path) { showStatus("Save failed", 60); returnToSaveView(); return; }
-            }
-            exportRexLoop();
-            returnToSaveView();
-        });
+        exportRexLoop(saveName);
+        returnToSaveView();
     } else {
         /* Cancel */
         returnToSaveView();
@@ -2015,7 +2029,8 @@ function doSave() {
     }
     host_module_set_param("save", "1");
     isRecordedFile = false;
-    showStatus("Saved!", 90);
+    var folder = leafFolder(openedFilePath);
+    showStatus("Saved to " + folder, 90);
     refreshState();
     refreshFileInfo();
     invalidateWaveform();
@@ -2216,8 +2231,9 @@ function doSaveAs(onDone) {
                     host_module_set_param("file_path", destPath);
                     refreshFileInfo();
                     isRecordedFile = false;
-                    showStatus("Saved " + destName, 90);
-                    announce("Saved " + destName);
+                    var destFolder = leafFolder(destPath);
+                    showStatus("Saved to " + destFolder, 90);
+                    announce("Saved to " + destFolder);
                     if (onDone) onDone();
                 } else {
                     showStatus("Save failed", 60);
@@ -2245,7 +2261,7 @@ function doExport() {
  * Output: <sampleDir>/<basename>-sliced/<basename>_s1.wav, _s2.wav, etc.
  * Uses the DSP export mechanism: set markers → sync → export → copy result → rename.
  */
-function exportSlicedWavs() {
+function exportSlicedWavs(overrideName) {
     if (!openedFilePath || !fileName || totalFrames <= 0) {
         showStatus("No file", 60);
         return;
@@ -2263,9 +2279,13 @@ function exportSlicedWavs() {
 
     announce("Exporting " + sliceCount + " slices");
 
-    /* Derive paths */
-    var baseName = fileName.replace(/\.wav$/i, "");
-    var sampleDir = openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
+    /* Derive paths — use overrideName for output naming if provided */
+    var baseName = overrideName
+        ? overrideName.replace(/\.wav$/i, "")
+        : fileName.replace(/\.wav$/i, "");
+    var sampleDir = isScratchFile()
+        ? SAVE_DIR
+        : openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
     var sliceDir = sampleDir + "/" + baseName + "-sliced";
 
     /* Create output directory */
@@ -2309,8 +2329,12 @@ function exportSlicedWavs() {
     syncMarkersToDs();
 
     if (exported > 0) {
-        showStatus(exported + " slices saved", 90);
-        announce("Exported " + exported + " slices");
+        var sliceDirLeaf = sliceDir.substring(sliceDir.lastIndexOf("/") + 1);
+        var sliceParentPath = sliceDir.substring(0, sliceDir.lastIndexOf("/"));
+        var sliceParent = sliceParentPath.substring(sliceParentPath.lastIndexOf("/") + 1);
+        var sliceLocation = sliceParent + "/" + sliceDirLeaf;
+        showStatus(exported + " slices to " + sliceLocation, 90);
+        announce("Saved " + exported + " slices to " + sliceLocation);
     } else {
         showStatus("Export failed", 60);
     }
@@ -2321,7 +2345,7 @@ function exportSlicedWavs() {
  * No slice count limit — REX supports arbitrary slices.
  * Output: <REX_LOOPS_DIR>/<baseName>.rx2
  */
-function exportRexLoop() {
+function exportRexLoop(overrideName) {
     if (!openedFilePath || !fileName || totalFrames <= 0) {
         showStatus("No file", 60);
         return;
@@ -2358,7 +2382,9 @@ function exportRexLoop() {
         return;
     }
 
-    var baseName = fileName.replace(/\.wav$/i, "");
+    var baseName = overrideName
+        ? overrideName.replace(/\.wav$/i, "")
+        : fileName.replace(/\.wav$/i, "");
     var sampleDir = openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
     var editPath = sampleDir + "/" + exportResult;
     var rx2Path = REX_LOOPS_DIR + "/" + baseName + ".rx2";
@@ -2384,8 +2410,9 @@ function exportRexLoop() {
     host_system_cmd('rm -f "' + editPath + '"');
 
     if (result === 0) {
-        showStatus("REX saved", 90);
-        announce("REX loop saved");
+        var rexFolder = leafFolder(rx2Path);
+        showStatus("Saved REX to " + rexFolder, 90);
+        announce("Saved REX loop to " + rexFolder);
     } else {
         showStatus("REX failed", 60);
     }
@@ -2446,7 +2473,7 @@ function buildDrumCellParams(playbackStart, playbackLength) {
  * Save current slices as an Ableton Move drum rack preset (.ablpreset).
  * Up to 16 slices, each mapped to a pad (MIDI notes 36-51).
  */
-function saveDrumRackPreset() {
+function saveDrumRackPreset(savedSource) {
     if (!fileName || totalFrames <= 0) {
         showStatus("No file", 60);
         return;
@@ -2603,8 +2630,14 @@ function saveDrumRackPreset() {
         host_ensure_dir(presetDir);
     }
     host_write_file(presetPath, presetJson);
-    showStatus("Kit saved!", 90);
-    announce("Saved " + presetName);
+    if (savedSource) {
+        var sampleFolder = leafFolder(openedFilePath);
+        showStatus("Drum Rack + Sample to " + sampleFolder, 90);
+        announce("Saved Drum Rack Preset and sample to " + sampleFolder);
+    } else {
+        showStatus("Saved Drum Rack Preset", 90);
+        announce("Saved Drum Rack Preset");
+    }
 }
 
 /**
