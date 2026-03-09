@@ -14,24 +14,24 @@
  * count. decodeDelta() returns the signed count for proportional response.
  *
  * Controls:
- *   Jog wheel    - Scroll view (zoomed, clamped to file bounds)  |  Menu: navigate
- *   Jog click    - Menu: select item
- *   E1 (Knob 1)  - Move start marker
- *   E2 (Knob 2)  - Move end marker
- *   E3 (Knob 3)  - Zoom in/out  |  Shift: vertical scale (1x-32x)
- *   E4 (Knob 4)  - Adjust gain  |  Shift: normalize (confirm overlay)
- *   Any pad      - Hold to audition selection, release to stop
- *   Mute         - Mute (zero out) selection
- *   Copy         - Copy selection to clipboard
- *   Shift+Copy   - Paste clipboard at cursor (insert)
- *   Delete       - Cut selection to clipboard (copy + remove)
- *   Shift+Capture- Export selection to new file
- *   Capture      - Save (overwrite confirmation)
- *   Undo         - Undo last destructive operation
- *   Loop         - Toggle loop mode
- *   Left/Right   - Nudge selection by one coarse step
- *   Shift+L/R    - Jump selection by one selection length
- *   Back         - Navigate back / exit
+ *   Jog wheel     - Scroll view (zoomed, clamped to file bounds)  |  Menu: navigate
+ *   Jog click     - Edit menu (Copy/Cut/Truncate/Normalize)  |  Shift: Paste/Export menu  |  other views: select item
+ *   E1 (Knob 1)   - Move start marker
+ *   E2 (Knob 2)   - Move end marker
+ *   E3 (Knob 3)   - Zoom in/out  |  Shift: vertical scale (1x-32x)
+ *   E4 (Knob 4)   - Adjust gain  |  Shift: normalize (confirm overlay)
+ *   Any pad       - Hold to audition selection, release to stop
+ *   Mute          - Mute (zero out) selection
+ *   Copy          - Copy selection to clipboard
+ *   Shift+Copy    - Paste clipboard at cursor (insert)
+ *   Remove        - Cut selection to clipboard (delete)
+ *   Shift+Capture - Export selection to new file
+ *   Capture       - Save (overwrite confirmation)
+ *   Undo          - Undo last destructive operation
+ *   Loop          - Toggle loop mode
+ *   Left/Right    - Nudge selection by one coarse step
+ *   Shift+L/R     - Jump selection by one selection length
+ *   Back          - Navigate back / exit
  */
 
 import * as os from 'os';
@@ -78,6 +78,8 @@ var VIEW_LOOP = 6;
 var VIEW_CONFIRM_SAVE = 7;
 var VIEW_OPEN_FILE = 8;
 var VIEW_SLICE = 9;
+var VIEW_JOG_MENU = 10;
+var VIEW_JOG_SHIFT_MENU = 11;
 
 /* MIDI CCs — use shared constants */
 var CC_JOG = MoveMainKnob;
@@ -254,6 +256,12 @@ var confirmIndex = 0;
 /* Confirm normalize overlay */
 var normalizeItems = ["Normalize", "Cancel"];
 var normalizeIndex = 0;
+
+/* Jog-click context menus (VIEW_TRIM) */
+var jogMenuItems = ["Copy", "Cut", "Truncate", "Normalize"];
+var jogMenuIndex = 0;
+var jogShiftMenuItems = ["Paste (insert)", "Export"];
+var jogShiftMenuIndex = 0;
 
 /* Confirm save overlay */
 var saveName = "";               /* Editable filename (without .wav) shown at top */
@@ -1707,6 +1715,44 @@ function drawConfirmSave() {
     }
 }
 
+/* ============ Drawing: Jog Menu ============ */
+
+function drawJogMenu() {
+    clear_screen();
+    printCentered(2, "Edit");
+    drawDivider(12);
+    var startY = 14;
+    var itemH = 12;
+    for (var i = 0; i < jogMenuItems.length; i++) {
+        var y = startY + i * itemH;
+        if (i === jogMenuIndex) {
+            fill_rect(0, y, SCREEN_W, itemH, 1);
+            print(8, y + 2, jogMenuItems[i], 0);
+        } else {
+            print(8, y + 2, jogMenuItems[i], 1);
+        }
+    }
+}
+
+/* ============ Drawing: Jog Shift Menu ============ */
+
+function drawJogShiftMenu() {
+    clear_screen();
+    printCentered(2, "Paste / Export");
+    drawDivider(12);
+    var startY = 14;
+    var itemH = 16;
+    for (var i = 0; i < jogShiftMenuItems.length; i++) {
+        var y = startY + i * itemH;
+        if (i === jogShiftMenuIndex) {
+            fill_rect(0, y, SCREEN_W, itemH, 1);
+            print(8, y + 4, jogShiftMenuItems[i], 0);
+        } else {
+            print(8, y + 4, jogShiftMenuItems[i], 1);
+        }
+    }
+}
+
 /* ============ Navigation & Actions ============ */
 
 /**
@@ -1718,6 +1764,10 @@ function switchView(view) {
         refreshState();
         refreshWaveform();
         updateLeds();
+        /* Reset pad LEDs — may be stale from slice mode */
+        for (var p = PAD_NOTE_MIN; p <= PAD_NOTE_MAX; p++) {
+            setLED(p, PAD_COLOR_DIM);
+        }
         announce("Edit, " + fileName);
     } else if (view === VIEW_LOOP) {
         /* Auto-enable loop when entering loop mode */
@@ -1728,6 +1778,10 @@ function switchView(view) {
         refreshState();
         invalidateSeamWaveform();
         updateLeds();
+        /* Reset pad LEDs — may be stale from slice mode */
+        for (var p2 = PAD_NOTE_MIN; p2 <= PAD_NOTE_MAX; p2++) {
+            setLED(p2, PAD_COLOR_DIM);
+        }
         announce("Loop, " + fileName);
     } else if (view === VIEW_SLICE) {
         /* Disable looping for slice audition */
@@ -2792,6 +2846,7 @@ function doNormalize() {
     updateLeds();
 }
 
+
 /* ============ MIDI Input Handling ============ */
 
 /**
@@ -2856,6 +2911,10 @@ function handleCC(cc, value) {
                 switchView(VIEW_TRIM);
                 break;
             case VIEW_CONFIRM_NORMALIZE:
+                switchView(VIEW_TRIM);
+                break;
+            case VIEW_JOG_MENU:
+            case VIEW_JOG_SHIFT_MENU:
                 switchView(VIEW_TRIM);
                 break;
             case VIEW_CONFIRM_SAVE:
@@ -3218,6 +3277,20 @@ function handleCC(cc, value) {
                 showJogStatus(loopSelectedField === 0 ? "Pt:" + formatTime(startSample) : "End:" + formatTime(endSample));
                 break;
 
+            case VIEW_JOG_MENU:
+                jogMenuIndex += delta;
+                if (jogMenuIndex < 0) jogMenuIndex = 0;
+                if (jogMenuIndex >= jogMenuItems.length) jogMenuIndex = jogMenuItems.length - 1;
+                announce(jogMenuItems[jogMenuIndex]);
+                break;
+
+            case VIEW_JOG_SHIFT_MENU:
+                jogShiftMenuIndex += delta;
+                if (jogShiftMenuIndex < 0) jogShiftMenuIndex = 0;
+                if (jogShiftMenuIndex >= jogShiftMenuItems.length) jogShiftMenuIndex = jogShiftMenuItems.length - 1;
+                announce(jogShiftMenuItems[jogShiftMenuIndex]);
+                break;
+
             case VIEW_SLICE:
                 if (lazyChopping) break; /* No jog edits while chopping */
                 if (sliceMenuEditing) {
@@ -3325,6 +3398,34 @@ function handleCC(cc, value) {
 
             case VIEW_CONFIRM_SAVE:
                 saveSelect();
+                break;
+
+            case VIEW_TRIM:
+                if (shiftHeld) {
+                    jogShiftMenuIndex = 0;
+                    switchView(VIEW_JOG_SHIFT_MENU);
+                } else {
+                    jogMenuIndex = 0;
+                    switchView(VIEW_JOG_MENU);
+                }
+                break;
+
+            case VIEW_JOG_MENU:
+                switch (jogMenuIndex) {
+                    case 0: doCopy(); break;
+                    case 1: doCut(); break;
+                    case 2: doTrim(); break;
+                    case 3: doNormalize(); break;
+                }
+                switchView(VIEW_TRIM);
+                break;
+
+            case VIEW_JOG_SHIFT_MENU:
+                switch (jogShiftMenuIndex) {
+                    case 0: doPaste(); break;
+                    case 1: doExport(); break;
+                }
+                switchView(VIEW_TRIM);
                 break;
 
             case VIEW_LOOP:
@@ -3931,6 +4032,12 @@ globalThis.tick = function() {
             break;
         case VIEW_SLICE:
             drawSliceView();
+            break;
+        case VIEW_JOG_MENU:
+            drawJogMenu();
+            break;
+        case VIEW_JOG_SHIFT_MENU:
+            drawJogShiftMenu();
             break;
     }
 };

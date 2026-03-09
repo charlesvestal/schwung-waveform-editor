@@ -1436,6 +1436,79 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         return;
     }
 
+    if (strcmp(key, "normalize_selection") == 0) {
+        /* Normalize only the selected region [start_sample, end_sample] */
+        int start = inst->start_sample;
+        int end   = inst->end_sample;
+        if (start < 0) start = 0;
+        if (end > inst->audio_frames) end = inst->audio_frames;
+        if (start >= end) { plugin_log("NormSel: empty selection"); return; }
+        if (!inst->audio_data) return;
+
+        save_undo(inst);
+
+        float sel_peak = compute_peak_db(inst->audio_data + start * SAMPLES_PER_FRAME,
+                                         end - start);
+        if (sel_peak <= -96.0f) { plugin_log("NormSel: selection silent"); return; }
+
+        float gain_db  = NORMALIZE_TARGET_DB - sel_peak;
+        float lin_gain = powf(10.0f, gain_db / 20.0f);
+        int   n_samp   = (end - start) * SAMPLES_PER_FRAME;
+        int16_t *ptr   = inst->audio_data + start * SAMPLES_PER_FRAME;
+        for (int i = 0; i < n_samp; i++) {
+            float s = (float)ptr[i] * lin_gain;
+            if (s >  32767.0f) s =  32767.0f;
+            if (s < -32768.0f) s = -32768.0f;
+            ptr[i] = (int16_t)s;
+        }
+        inst->dirty   = 1;
+        inst->peak_db = compute_peak_db(inst->audio_data, inst->audio_frames);
+        compute_waveform(inst, 128);
+        {
+            char log_buf[128];
+            snprintf(log_buf, sizeof(log_buf),
+                     "NormSel: applied %.1f dB to frames %d-%d", gain_db, start, end);
+            plugin_log(log_buf);
+        }
+        return;
+    }
+
+    if (strcmp(key, "paste_overwrite") == 0) {
+        /* Paste clipboard at start_sample, overwriting (file length unchanged) */
+        if (!inst->clipboard_data || inst->clipboard_frames <= 0) {
+            plugin_log("PasteOW: clipboard empty"); return; }
+        if (!inst->audio_data || inst->audio_frames <= 0) return;
+
+        int insert_at = inst->start_sample;
+        if (insert_at < 0) insert_at = 0;
+        if (insert_at >= inst->audio_frames) {
+            plugin_log("PasteOW: cursor at/past EOF"); return; }
+
+        int frames_to_write = inst->clipboard_frames;
+        if (insert_at + frames_to_write > inst->audio_frames)
+            frames_to_write = inst->audio_frames - insert_at;
+
+        save_undo(inst);
+
+        memcpy(inst->audio_data + insert_at * SAMPLES_PER_FRAME,
+               inst->clipboard_data,
+               (size_t)frames_to_write * SAMPLES_PER_FRAME * sizeof(int16_t));
+
+        inst->start_sample = insert_at;
+        inst->end_sample   = insert_at + frames_to_write;
+        inst->dirty   = 1;
+        inst->playing = 0;
+        compute_waveform(inst, 128);
+        inst->peak_db = compute_peak_db(inst->audio_data, inst->audio_frames);
+        {
+            char log_buf[128];
+            snprintf(log_buf, sizeof(log_buf),
+                     "PasteOW: wrote %d frames at %d", frames_to_write, insert_at);
+            plugin_log(log_buf);
+        }
+        return;
+    }
+
     if (strcmp(key, "undo") == 0) {
         if (!inst->has_undo || !inst->undo_buffer) {
             plugin_log("Undo: nothing to undo");
