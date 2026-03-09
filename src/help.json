@@ -211,6 +211,29 @@
         "  from menu to fully",
         "  exit."
       ]
+    },
+    {
+      "title": "BPM Mode",
+      "lines": [
+        "BPM Step (Trim):",
+        "  Jog click > BPM Step",
+        "  Jog: move marker by",
+        "    beat division",
+        "  Jog click: toggle",
+        "    start / end",
+        "  E1: set BPM",
+        "    (Shift: fine ±0.1)",
+        "  E2: set division",
+        "  Back: return to edit",
+        "",
+        "BPM Slice:",
+        "  Slice mode > BPM",
+        "  Footer: [BPM][val]",
+        "    [div][select]",
+        "  Jog edits focused",
+        "    item (BPM/div)",
+        "  Max 32 slices"
+      ]
     }
   ]
 }

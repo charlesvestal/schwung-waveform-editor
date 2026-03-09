@@ -12,6 +12,7 @@ A full-featured audio waveform editor for your Ableton Move. Trim, gain adjust, 
 - Hold-to-audition playback with loop mode
 - Undo support for all destructive edits
 - Export selection to new file
+- BPM-grid slicing and beat-aligned marker snapping
 
 ## Prerequisites
 
@@ -41,7 +42,7 @@ cd move-anything-waveform-editor
 | Control | Function |
 |---------|----------|
 | Jog wheel | Scroll view when zoomed in (Shift: fine scroll) |
-| Jog click | Edit menu: Copy, Cut, Truncate, Normalize Sel |
+| Jog click | Edit menu: Copy, Cut, Truncate, Normalize Sel, BPM Step |
 | Shift+Jog click | Paste/Export menu: Paste (insert), Paste (overwrite), Export |
 | Knob 1 | Move start marker |
 | Knob 2 | Move end marker |

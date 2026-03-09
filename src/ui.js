@@ -15,7 +15,7 @@
  *
  * Controls:
  *   Jog wheel     - Scroll view (zoomed, clamped to file bounds)  |  Menu: navigate
- *   Jog click     - Edit menu (Copy/Cut/Truncate/Normalize)  |  Shift: Paste/Export menu  |  other views: select item
+ *   Jog click     - Edit menu (Copy/Cut/Truncate/Normalize/BPM Step)  |  Shift: Paste/Export menu  |  other views: select item
  *   E1 (Knob 1)   - Move start marker
  *   E2 (Knob 2)   - Move end marker
  *   E3 (Knob 3)   - Zoom in/out  |  Shift: vertical scale (1x-32x)
@@ -80,6 +80,7 @@ var VIEW_OPEN_FILE = 8;
 var VIEW_SLICE = 9;
 var VIEW_JOG_MENU = 10;
 var VIEW_JOG_SHIFT_MENU = 11;
+var VIEW_BPM_TRIM = 12;
 
 /* MIDI CCs — use shared constants */
 var CC_JOG = MoveMainKnob;
@@ -189,10 +190,17 @@ var cachedSeamHalf = -1;
 /* Loop view selected field: 0=start (loop point), 1=end */
 var loopSelectedField = 0;
 
+/* BPM state */
+var bpm = 120.0;
+var beatDivIndex = 2;  /* default: 1/4 */
+var BEAT_DIVISIONS = [1, 2, 4, 8, 16];
+var BEAT_DIVISION_LABELS = ["1/1", "1/2", "1/4", "1/8", "1/16"];
+
 /* Slice state */
 var SLICE_MODE_EVEN = 0;
 var SLICE_MODE_AUTO = 1;
 var SLICE_MODE_LAZY = 2;
+var SLICE_MODE_BPM = 3;
 var sliceMode = SLICE_MODE_EVEN;
 
 /* Lazy chop sub-modes */
@@ -258,7 +266,7 @@ var normalizeItems = ["Normalize", "Cancel"];
 var normalizeIndex = 0;
 
 /* Jog-click context menus (VIEW_TRIM) */
-var jogMenuItems = ["Copy", "Cut", "Truncate", "Normalize Sel"];
+var jogMenuItems = ["Copy", "Cut", "Truncate", "Normalize Sel", "BPM Step"];
 var jogMenuIndex = 0;
 var jogShiftMenuItems = ["Paste (insert)", "Paste (overwrite)", "Export"];
 var jogShiftMenuIndex = 0;
@@ -658,6 +666,16 @@ function getCoarseStep() {
 }
 
 /**
+ * Get step size in samples for the current BPM and beat division.
+ */
+function getBeatStepSamples() {
+    var beatsPerSec = bpm / 60.0;
+    var samplesPerQuarter = sampleRate / beatsPerSec;
+    var div = BEAT_DIVISIONS[beatDivIndex];
+    return Math.max(1, Math.round(samplesPerQuarter * 4 / div));
+}
+
+/**
  * Get the number of visible samples at the current zoom level.
  * Minimum 128 samples (1 sample per pixel).
  */
@@ -929,6 +947,22 @@ function recomputeSliceBoundaries() {
         sliceBoundaries = [];
         for (var i = 0; i <= sliceCount; i++) {
             sliceBoundaries.push(sliceRegionStart + Math.round((regionLen * i) / sliceCount));
+        }
+    } else if (sliceMode === SLICE_MODE_BPM) {
+        var stepSamples = getBeatStepSamples();
+        sliceBoundaries = [sliceRegionStart];
+        var pos = sliceRegionStart + stepSamples;
+        while (pos < sliceRegionEnd) {
+            sliceBoundaries.push(pos);
+            pos += stepSamples;
+        }
+        sliceBoundaries.push(sliceRegionEnd);
+        sliceCount = sliceBoundaries.length - 1;
+        if (sliceCount < 1) sliceCount = 1;
+        if (sliceCount > 32) {
+            sliceCount = 32;
+            sliceBoundaries = sliceBoundaries.slice(0, 33);
+            sliceBoundaries[32] = sliceRegionEnd;
         }
     } else {
         /* Auto: transient detection */
@@ -1550,30 +1584,35 @@ function drawSliceView() {
         printCentered(54, footerStatus);
     } else {
         /* Build footer items based on slice menu */
-        var modeLabel = sliceMode === SLICE_MODE_EVEN ? "Even" : (sliceMode === SLICE_MODE_AUTO ? "Auto" : "Lazy");
-        var countLabel;
-        if (sliceMode === SLICE_MODE_LAZY) {
-            countLabel = lazySub === LAZY_SUB_CHOP ? "Chop" : "Play";
-        } else if (sliceMode === SLICE_MODE_EVEN) {
-            countLabel = "" + sliceCount;
-        } else {
-            countLabel = "T:" + sliceThreshold.toFixed(1);
-        }
         var selLabel = (selectedSlice + 1) + "/" + sliceCount;
         if (sliceCount > 32) {
             var bankNum = Math.floor(slicePadOffset / 32) + 1;
             selLabel += " P" + bankNum;
         }
         var timeLabel = formatTime(startSample);
+        var labels;
+        if (sliceMode === SLICE_MODE_BPM) {
+            labels = ["BPM", bpm.toFixed(1), BEAT_DIVISION_LABELS[beatDivIndex], selLabel];
+        } else {
+            var modeLabel = sliceMode === SLICE_MODE_EVEN ? "Even" : (sliceMode === SLICE_MODE_AUTO ? "Auto" : "Lazy");
+            var countLabel;
+            if (sliceMode === SLICE_MODE_LAZY) {
+                countLabel = lazySub === LAZY_SUB_CHOP ? "Chop" : "Play";
+            } else if (sliceMode === SLICE_MODE_EVEN) {
+                countLabel = "" + sliceCount;
+            } else {
+                countLabel = "T:" + sliceThreshold.toFixed(1);
+            }
+            labels = [modeLabel, countLabel, selLabel];
+        }
 
         /* Draw footer items with visual distinction:
          * - Focused (navigating): [brackets]
          * - Editing (active): inverse highlight (filled rect + dark text) */
-        var labels = [modeLabel, countLabel, selLabel];
         var CHAR_W = 6; /* 5px char + 1px gap */
         var footerY = 54;
         var x = 0;
-        for (var fi = 0; fi < 3; fi++) {
+        for (var fi = 0; fi < labels.length; fi++) {
             var label = labels[fi];
             var isFocused = (fi === sliceMenuIndex);
             var isEditing = isFocused && sliceMenuEditing;
@@ -1751,6 +1790,18 @@ function drawJogShiftMenu() {
             print(8, y + 4, jogShiftMenuItems[i], 1);
         }
     }
+}
+
+/* ============ Drawing: BPM Trim ============ */
+
+function drawBpmTrim() {
+    /* Reuse trim view, then overlay BPM status bar at bottom */
+    drawTrimView();
+    var bpmStatus = "BPM:" + bpm.toFixed(1) + " " + BEAT_DIVISION_LABELS[beatDivIndex] +
+                    "  " + (selectedField === 0 ? "[Start]" : "[End]");
+    /* Overwrite the status area at very bottom */
+    fill_rect(0, SCREEN_H - 9, SCREEN_W, 9, 0);
+    print(0, SCREEN_H - 8, bpmStatus, 1);
 }
 
 /* ============ Navigation & Actions ============ */
@@ -2944,6 +2995,7 @@ function handleCC(cc, value) {
                 break;
             case VIEW_JOG_MENU:
             case VIEW_JOG_SHIFT_MENU:
+            case VIEW_BPM_TRIM:
                 switchView(VIEW_TRIM);
                 break;
             case VIEW_CONFIRM_SAVE:
@@ -3320,19 +3372,28 @@ function handleCC(cc, value) {
                 announce(jogShiftMenuItems[jogShiftMenuIndex]);
                 break;
 
+            case VIEW_BPM_TRIM:
+                /* Jog moves selected marker by one beat step */
+                adjustMarker(selectedField, delta * getBeatStepSamples());
+                showJogStatus((selectedField === 0 ? "Start:" : "End:") + formatTime(selectedField === 0 ? startSample : endSample));
+                refreshWaveform();
+                break;
+
             case VIEW_SLICE:
                 if (lazyChopping) break; /* No jog edits while chopping */
                 if (sliceMenuEditing) {
                     /* Editing the focused parameter */
                     if (sliceMenuIndex === 0) {
                         /* Toggle mode */
-                        /* Cycle: Even -> Auto -> Lazy -> Even */
+                        /* Cycle: Even -> Auto -> Lazy -> BPM -> Even */
                         if (delta > 0) {
                             if (sliceMode === SLICE_MODE_EVEN) sliceMode = SLICE_MODE_AUTO;
                             else if (sliceMode === SLICE_MODE_AUTO) sliceMode = SLICE_MODE_LAZY;
+                            else if (sliceMode === SLICE_MODE_LAZY) sliceMode = SLICE_MODE_BPM;
                             else sliceMode = SLICE_MODE_EVEN;
                         } else {
-                            if (sliceMode === SLICE_MODE_EVEN) sliceMode = SLICE_MODE_LAZY;
+                            if (sliceMode === SLICE_MODE_EVEN) sliceMode = SLICE_MODE_BPM;
+                            else if (sliceMode === SLICE_MODE_BPM) sliceMode = SLICE_MODE_LAZY;
                             else if (sliceMode === SLICE_MODE_LAZY) sliceMode = SLICE_MODE_AUTO;
                             else sliceMode = SLICE_MODE_EVEN;
                         }
@@ -3349,10 +3410,21 @@ function handleCC(cc, value) {
                         selectSlice(0);
                         syncMarkersToDs();
                         updateSlicePadLeds();
-                        var modeAnnounce = sliceMode === SLICE_MODE_LAZY ? "Lazy, press Pad 1" : (sliceMode === SLICE_MODE_AUTO ? "Auto" : "Even");
+                        var modeAnnounce = sliceMode === SLICE_MODE_LAZY ? "Lazy, press Pad 1" : (sliceMode === SLICE_MODE_AUTO ? "Auto" : (sliceMode === SLICE_MODE_BPM ? "BPM" : "Even"));
                         announce(modeAnnounce);
                     } else if (sliceMenuIndex === 1) {
-                        if (sliceMode === SLICE_MODE_LAZY) {
+                        if (sliceMode === SLICE_MODE_BPM) {
+                            /* Adjust BPM: normal = ±1, shift = ±0.1 */
+                            bpm += delta * (shiftHeld ? 0.1 : 1.0);
+                            if (bpm < 20) bpm = 20;
+                            if (bpm > 999) bpm = 999;
+                            bpm = Math.round(bpm * 10) / 10;
+                            recomputeSliceBoundaries();
+                            selectSlice(selectedSlice);
+                            syncMarkersToDs();
+                            updateSlicePadLeds();
+                            announce("BPM:" + bpm.toFixed(1));
+                        } else if (sliceMode === SLICE_MODE_LAZY) {
                             /* Toggle Chop / Play sub-mode */
                             lazySub = (lazySub === LAZY_SUB_CHOP) ? LAZY_SUB_PLAY : LAZY_SUB_CHOP;
                             lazyChopping = false;
@@ -3381,28 +3453,52 @@ function handleCC(cc, value) {
                             announce("Thresh:" + sliceThreshold.toFixed(1));
                         }
                     } else if (sliceMenuIndex === 2) {
-                        /* Cycle selected slice */
-                        var newIdx = selectedSlice + (delta > 0 ? 1 : -1);
-                        if (newIdx < 0) newIdx = sliceCount - 1;
-                        if (newIdx >= sliceCount) newIdx = 0;
-                        selectSlice(newIdx);
-                        /* Auto-scroll pad bank */
-                        if (selectedSlice < slicePadOffset) {
-                            slicePadOffset = Math.floor(selectedSlice / 32) * 32;
-                        } else if (selectedSlice >= slicePadOffset + 32) {
-                            slicePadOffset = Math.floor(selectedSlice / 32) * 32;
+                        if (sliceMode === SLICE_MODE_BPM) {
+                            /* Cycle beat division */
+                            beatDivIndex += (delta > 0 ? 1 : -1);
+                            if (beatDivIndex < 0) beatDivIndex = BEAT_DIVISIONS.length - 1;
+                            if (beatDivIndex >= BEAT_DIVISIONS.length) beatDivIndex = 0;
+                            recomputeSliceBoundaries();
+                            selectSlice(selectedSlice);
+                            syncMarkersToDs();
+                            updateSlicePadLeds();
+                            announce("Div:" + BEAT_DIVISION_LABELS[beatDivIndex]);
+                        } else {
+                            /* Cycle selected slice */
+                            var newIdx = selectedSlice + (delta > 0 ? 1 : -1);
+                            if (newIdx < 0) newIdx = sliceCount - 1;
+                            if (newIdx >= sliceCount) newIdx = 0;
+                            selectSlice(newIdx);
+                            /* Auto-scroll pad bank */
+                            if (selectedSlice < slicePadOffset) {
+                                slicePadOffset = Math.floor(selectedSlice / 32) * 32;
+                            } else if (selectedSlice >= slicePadOffset + 32) {
+                                slicePadOffset = Math.floor(selectedSlice / 32) * 32;
+                            }
+                            syncMarkersToDs();
+                            updateSlicePadLeds();
+                            announce("Slice " + (selectedSlice + 1) + "/" + sliceCount);
                         }
+                    } else if (sliceMenuIndex === 3) {
+                        /* BPM mode only: index 3 = slice select */
+                        var newIdx3 = selectedSlice + (delta > 0 ? 1 : -1);
+                        if (newIdx3 < 0) newIdx3 = sliceCount - 1;
+                        if (newIdx3 >= sliceCount) newIdx3 = 0;
+                        selectSlice(newIdx3);
                         syncMarkersToDs();
                         updateSlicePadLeds();
                         announce("Slice " + (selectedSlice + 1) + "/" + sliceCount);
                     }
                 } else {
                     /* Navigate between menu items */
+                    var maxMenuIdx = (sliceMode === SLICE_MODE_BPM) ? 3 : 2;
                     sliceMenuIndex += (delta > 0 ? 1 : -1);
                     if (sliceMenuIndex < 0) sliceMenuIndex = 0;
-                    if (sliceMenuIndex > 2) sliceMenuIndex = 2;
-                    var param2Name = sliceMode === SLICE_MODE_LAZY ? "Sub-mode" : (sliceMode === SLICE_MODE_EVEN ? "Count" : "Thresh");
-                    var itemNames = ["Mode", param2Name, "Select"];
+                    if (sliceMenuIndex > maxMenuIdx) sliceMenuIndex = maxMenuIdx;
+                    var param2Name = sliceMode === SLICE_MODE_BPM ? "BPM" : (sliceMode === SLICE_MODE_LAZY ? "Sub-mode" : (sliceMode === SLICE_MODE_EVEN ? "Count" : "Thresh"));
+                    var itemNames = sliceMode === SLICE_MODE_BPM
+                        ? ["Mode", "BPM", "Div", "Select"]
+                        : ["Mode", param2Name, "Select"];
                     announce(itemNames[sliceMenuIndex]);
                 }
                 break;
@@ -3445,8 +3541,15 @@ function handleCC(cc, value) {
                     case 1: doCut(); break;
                     case 2: doTrim(); break;
                     case 3: doNormalizeSelection(); break;
+                    case 4: switchView(VIEW_BPM_TRIM); return; /* don't switch back to TRIM */
                 }
                 switchView(VIEW_TRIM);
+                break;
+
+            case VIEW_BPM_TRIM:
+                /* Jog click: toggle start/end marker */
+                selectedField = selectedField === 0 ? 1 : 0;
+                showStatus(selectedField === 0 ? "Start" : "End", 30);
                 break;
 
             case VIEW_JOG_SHIFT_MENU:
@@ -3516,7 +3619,14 @@ function handleCC(cc, value) {
         var delta = decodeDelta(value);
         if (delta === 0) return;
 
-        if (currentView === VIEW_TRIM) {
+        if (currentView === VIEW_BPM_TRIM) {
+            /* E1 in BPM trim: adjust BPM (normal=±1, shift=±0.1) */
+            bpm += delta * (shiftHeld ? 0.1 : 1.0);
+            if (bpm < 20) bpm = 20;
+            if (bpm > 999) bpm = 999;
+            bpm = Math.round(bpm * 10) / 10;
+            showKnobStatus(0, "BPM:" + bpm.toFixed(1));
+        } else if (currentView === VIEW_TRIM) {
             var step = shiftHeld ? 1 : getCoarseStep();
             adjustMarker(0, delta * step);
             showKnobStatus(0, shiftHeld ? "S:" + startSample : "Start:" + formatTime(startSample));
@@ -3564,7 +3674,13 @@ function handleCC(cc, value) {
         var delta = decodeDelta(value);
         if (delta === 0) return;
 
-        if (currentView === VIEW_TRIM) {
+        if (currentView === VIEW_BPM_TRIM) {
+            /* E2 in BPM trim: cycle beat division */
+            beatDivIndex += (delta > 0 ? 1 : -1);
+            if (beatDivIndex < 0) beatDivIndex = BEAT_DIVISIONS.length - 1;
+            if (beatDivIndex >= BEAT_DIVISIONS.length) beatDivIndex = 0;
+            showKnobStatus(1, "Div:" + BEAT_DIVISION_LABELS[beatDivIndex]);
+        } else if (currentView === VIEW_TRIM) {
             var step = shiftHeld ? 1 : getCoarseStep();
             adjustMarker(1, delta * step);
             showKnobStatus(1, shiftHeld ? "E:" + endSample : "End:" + formatTime(endSample));
@@ -4068,6 +4184,9 @@ globalThis.tick = function() {
             break;
         case VIEW_JOG_SHIFT_MENU:
             drawJogShiftMenu();
+            break;
+        case VIEW_BPM_TRIM:
+            drawBpmTrim();
             break;
     }
 };
