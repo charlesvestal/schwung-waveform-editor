@@ -43,8 +43,8 @@ import {
     MoveCapture, MoveRec, MoveSample, MoveUndo, MoveLoop, MoveCopy, MoveMute, MoveDelete,
     MoveLeft, MoveRight, MoveDown, MoveUp,
     MovePads,
-    MoveKnob1, MoveKnob2, MoveKnob3, MoveKnob4, MoveKnob5, MoveKnob7, MoveKnob8,
-    MoveKnob5Touch, MoveKnob7Touch, MoveKnob8Touch,
+    MoveKnob1, MoveKnob2, MoveKnob3, MoveKnob4, MoveKnob5, MoveKnob6, MoveKnob7, MoveKnob8,
+    MoveKnob5Touch, MoveKnob6Touch, MoveKnob7Touch, MoveKnob8Touch,
     White, Black, DarkGrey, LightGrey, BrightRed,
     WhiteLedOff, WhiteLedDim, WhiteLedMedium, WhiteLedBright
 } from '/data/UserData/move-anything/shared/constants.mjs';
@@ -90,6 +90,7 @@ var CC_E2 = MoveKnob2;
 var CC_E3 = MoveKnob3;
 var CC_E4 = MoveKnob4;
 var CC_E5 = MoveKnob5;
+var CC_E6 = MoveKnob6;
 var CC_E7 = MoveKnob7;
 var CC_E8 = MoveKnob8;
 var CC_SHIFT = MoveShift;
@@ -268,6 +269,8 @@ var normalizeIndex = 0;
 /* Jog-click context menus (VIEW_TRIM) */
 var jogMenuItems = ["Copy", "Cut", "Truncate", "Normalize Sel", "BPM Step"];
 var jogMenuIndex = 0;
+var jogMenuScrollOffset = 0;
+var JOG_MENU_VISIBLE = 4;
 var jogShiftMenuItems = ["Paste (insert)", "Paste (overwrite)", "Export"];
 var jogShiftMenuIndex = 0;
 
@@ -1762,8 +1765,9 @@ function drawJogMenu() {
     drawDivider(12);
     var startY = 14;
     var itemH = 12;
-    for (var i = 0; i < jogMenuItems.length; i++) {
-        var y = startY + i * itemH;
+    var end = Math.min(jogMenuScrollOffset + JOG_MENU_VISIBLE, jogMenuItems.length);
+    for (var i = jogMenuScrollOffset; i < end; i++) {
+        var y = startY + (i - jogMenuScrollOffset) * itemH;
         if (i === jogMenuIndex) {
             fill_rect(0, y, SCREEN_W, itemH, 1);
             print(8, y + 2, jogMenuItems[i], 0);
@@ -1771,6 +1775,8 @@ function drawJogMenu() {
             print(8, y + 2, jogMenuItems[i], 1);
         }
     }
+    if (jogMenuScrollOffset > 0) print(SCREEN_W - 6, startY, "^", 1);
+    if (end < jogMenuItems.length) print(SCREEN_W - 6, startY + (JOG_MENU_VISIBLE - 1) * itemH, "v", 1);
 }
 
 /* ============ Drawing: Jog Shift Menu ============ */
@@ -1800,8 +1806,8 @@ function drawBpmTrim() {
     var bpmStatus = "BPM:" + bpm.toFixed(1) + " " + BEAT_DIVISION_LABELS[beatDivIndex] +
                     "  " + (selectedField === 0 ? "[Start]" : "[End]");
     /* Overwrite the status area at very bottom */
-    fill_rect(0, SCREEN_H - 9, SCREEN_W, 9, 0);
-    print(0, SCREEN_H - 8, bpmStatus, 1);
+    fill_rect(0, SCREEN_H - 10, SCREEN_W, 10, 0);
+    print(0, SCREEN_H - 9, bpmStatus, 1);
 }
 
 /* ============ Navigation & Actions ============ */
@@ -2945,7 +2951,7 @@ function handleCC(cc, value) {
     }
 
     /* Only handle presses (value > 0) for remaining CCs, except jog/encoders */
-    var isEncoder = (cc === CC_JOG || cc === CC_E1 || cc === CC_E2 || cc === CC_E3 || cc === CC_E4 || cc === CC_E5 || cc === CC_E7 || cc === CC_E8);
+    var isEncoder = (cc === CC_JOG || cc === CC_E1 || cc === CC_E2 || cc === CC_E3 || cc === CC_E4 || cc === CC_E5 || cc === CC_E6 || cc === CC_E7 || cc === CC_E8);
 
     /* Back button */
     if (cc === CC_BACK && value > 0) {
@@ -3052,6 +3058,22 @@ function handleCC(cc, value) {
 
     /* Copy button: normal = copy to clipboard, shift = paste */
     if (cc === CC_COPY && value > 0) {
+        if (currentView === VIEW_BPM_TRIM) {
+            /* Extract BPM from filename (e.g. "loop_120bpm_dry.wav" → 120) */
+            var bpmMatch = fileName.match(/(\d+(?:\.\d+)?)\s*bpm/i);
+            if (bpmMatch) {
+                var detectedBpm = parseFloat(bpmMatch[1]);
+                if (detectedBpm >= 20 && detectedBpm <= 999) {
+                    bpm = Math.round(detectedBpm * 10) / 10;
+                    showStatus("BPM: " + bpm.toFixed(1), 90);
+                } else {
+                    showStatus("BPM out of range", 60);
+                }
+            } else {
+                showStatus("No BPM in filename", 60);
+            }
+            return;
+        }
         if (currentView === VIEW_TRIM || currentView === VIEW_LOOP) {
             if (shiftHeld) {
                 doPaste();
@@ -3182,7 +3204,15 @@ function handleCC(cc, value) {
 
     /* Left/Right arrows — nudge selection or jump by selection length */
     if ((cc === CC_LEFT || cc === CC_RIGHT) && value > 0) {
-        if (currentView === VIEW_TRIM) {
+        if (currentView === VIEW_BPM_TRIM) {
+            /* Move selected marker by one beat division */
+            var dir = (cc === CC_LEFT) ? -1 : 1;
+            adjustMarker(selectedField, dir * getBeatStepSamples());
+            syncMarkersToDs();
+            refreshWaveform();
+            showStatus((selectedField === 0 ? "Start:" : "End:") + formatTime(selectedField === 0 ? startSample : endSample), 30);
+            return;
+        } else if (currentView === VIEW_TRIM) {
             var selLen = endSample - startSample;
             var dir = (cc === CC_LEFT) ? -1 : 1;
 
@@ -3362,6 +3392,8 @@ function handleCC(cc, value) {
                 jogMenuIndex += delta;
                 if (jogMenuIndex < 0) jogMenuIndex = 0;
                 if (jogMenuIndex >= jogMenuItems.length) jogMenuIndex = jogMenuItems.length - 1;
+                if (jogMenuIndex < jogMenuScrollOffset) jogMenuScrollOffset = jogMenuIndex;
+                if (jogMenuIndex >= jogMenuScrollOffset + JOG_MENU_VISIBLE) jogMenuScrollOffset = jogMenuIndex - JOG_MENU_VISIBLE + 1;
                 announce(jogMenuItems[jogMenuIndex]);
                 break;
 
@@ -3373,134 +3405,42 @@ function handleCC(cc, value) {
                 break;
 
             case VIEW_BPM_TRIM:
-                /* Jog moves selected marker by one beat step */
-                adjustMarker(selectedField, delta * getBeatStepSamples());
-                showJogStatus((selectedField === 0 ? "Start:" : "End:") + formatTime(selectedField === 0 ? startSample : endSample));
-                refreshWaveform();
+                /* Jog scrolls viewport (same as VIEW_TRIM when zoomed) */
+                if (zoomLevel > 0) {
+                    var scrollStep = shiftHeld
+                        ? Math.max(1, Math.floor(getVisibleSamples() / SCREEN_W))
+                        : Math.max(1, Math.floor(getVisibleSamples() / 8));
+                    zoomCenter += delta * scrollStep;
+                    var visHalf2 = Math.floor(getVisibleSamples() / 2);
+                    if (zoomCenter < visHalf2) zoomCenter = visHalf2;
+                    if (zoomCenter > totalFrames - visHalf2) zoomCenter = totalFrames - visHalf2;
+                    refreshWaveform();
+                    showJogStatus("Pos:" + formatTime(getVisibleStart()));
+                }
                 break;
 
             case VIEW_SLICE:
-                if (lazyChopping) break; /* No jog edits while chopping */
-                if (sliceMenuEditing) {
-                    /* Editing the focused parameter */
-                    if (sliceMenuIndex === 0) {
-                        /* Toggle mode */
-                        /* Cycle: Even -> Auto -> Lazy -> BPM -> Even */
-                        if (delta > 0) {
-                            if (sliceMode === SLICE_MODE_EVEN) sliceMode = SLICE_MODE_AUTO;
-                            else if (sliceMode === SLICE_MODE_AUTO) sliceMode = SLICE_MODE_LAZY;
-                            else if (sliceMode === SLICE_MODE_LAZY) sliceMode = SLICE_MODE_BPM;
-                            else sliceMode = SLICE_MODE_EVEN;
-                        } else {
-                            if (sliceMode === SLICE_MODE_EVEN) sliceMode = SLICE_MODE_BPM;
-                            else if (sliceMode === SLICE_MODE_BPM) sliceMode = SLICE_MODE_LAZY;
-                            else if (sliceMode === SLICE_MODE_LAZY) sliceMode = SLICE_MODE_AUTO;
-                            else sliceMode = SLICE_MODE_EVEN;
-                        }
-                        if (sliceMode === SLICE_MODE_LAZY) {
-                            lazySub = LAZY_SUB_CHOP;
-                            lazyChopping = false;
-                        }
-                        /* Reset to full region when switching modes */
-                        sliceCount = 1;
-                        selectedSlice = 0;
-                        sliceBoundaries = [];
-                        slicePadOffset = 0;
-                        recomputeSliceBoundaries();
-                        selectSlice(0);
-                        syncMarkersToDs();
-                        updateSlicePadLeds();
-                        var modeAnnounce = sliceMode === SLICE_MODE_LAZY ? "Lazy, press Pad 1" : (sliceMode === SLICE_MODE_AUTO ? "Auto" : (sliceMode === SLICE_MODE_BPM ? "BPM" : "Even"));
-                        announce(modeAnnounce);
-                    } else if (sliceMenuIndex === 1) {
-                        if (sliceMode === SLICE_MODE_BPM) {
-                            /* Adjust BPM: normal = ±1, shift = ±0.1 */
-                            bpm += delta * (shiftHeld ? 0.1 : 1.0);
-                            if (bpm < 20) bpm = 20;
-                            if (bpm > 999) bpm = 999;
-                            bpm = Math.round(bpm * 10) / 10;
-                            recomputeSliceBoundaries();
-                            selectSlice(selectedSlice);
-                            syncMarkersToDs();
-                            updateSlicePadLeds();
-                            announce("BPM:" + bpm.toFixed(1));
-                        } else if (sliceMode === SLICE_MODE_LAZY) {
-                            /* Toggle Chop / Play sub-mode */
-                            lazySub = (lazySub === LAZY_SUB_CHOP) ? LAZY_SUB_PLAY : LAZY_SUB_CHOP;
-                            lazyChopping = false;
-                            updateSlicePadLeds();
-                            announce(lazySub === LAZY_SUB_CHOP ? "Chop, press Pad 1" : "Play");
-                        } else if (sliceMode === SLICE_MODE_EVEN) {
-                            /* Adjust slice count */
-                            sliceCount += (delta > 0 ? 1 : -1);
-                            if (sliceCount < 1) sliceCount = 1;
-                            if (sliceCount > 128) sliceCount = 128;
-                            recomputeSliceBoundaries();
-                            selectSlice(selectedSlice);
-                            syncMarkersToDs();
-                            updateSlicePadLeds();
-                            announce("Slices:" + sliceCount);
-                        } else {
-                            /* Adjust auto threshold (jog = fine 0.1 steps) */
-                            sliceThreshold += delta * 0.1;
-                            sliceThreshold = Math.round(sliceThreshold * 10) / 10;
-                            if (sliceThreshold < 0.1) sliceThreshold = 0.1;
-                            if (sliceThreshold > 100) sliceThreshold = 100;
-                            recomputeSliceBoundaries();
-                            selectSlice(selectedSlice);
-                            syncMarkersToDs();
-                            updateSlicePadLeds();
-                            announce("Thresh:" + sliceThreshold.toFixed(1));
-                        }
-                    } else if (sliceMenuIndex === 2) {
-                        if (sliceMode === SLICE_MODE_BPM) {
-                            /* Cycle beat division */
-                            beatDivIndex += (delta > 0 ? 1 : -1);
-                            if (beatDivIndex < 0) beatDivIndex = BEAT_DIVISIONS.length - 1;
-                            if (beatDivIndex >= BEAT_DIVISIONS.length) beatDivIndex = 0;
-                            recomputeSliceBoundaries();
-                            selectSlice(selectedSlice);
-                            syncMarkersToDs();
-                            updateSlicePadLeds();
-                            announce("Div:" + BEAT_DIVISION_LABELS[beatDivIndex]);
-                        } else {
-                            /* Cycle selected slice */
-                            var newIdx = selectedSlice + (delta > 0 ? 1 : -1);
-                            if (newIdx < 0) newIdx = sliceCount - 1;
-                            if (newIdx >= sliceCount) newIdx = 0;
-                            selectSlice(newIdx);
-                            /* Auto-scroll pad bank */
-                            if (selectedSlice < slicePadOffset) {
-                                slicePadOffset = Math.floor(selectedSlice / 32) * 32;
-                            } else if (selectedSlice >= slicePadOffset + 32) {
-                                slicePadOffset = Math.floor(selectedSlice / 32) * 32;
-                            }
-                            syncMarkersToDs();
-                            updateSlicePadLeds();
-                            announce("Slice " + (selectedSlice + 1) + "/" + sliceCount);
-                        }
-                    } else if (sliceMenuIndex === 3) {
-                        /* BPM mode only: index 3 = slice select */
-                        var newIdx3 = selectedSlice + (delta > 0 ? 1 : -1);
-                        if (newIdx3 < 0) newIdx3 = sliceCount - 1;
-                        if (newIdx3 >= sliceCount) newIdx3 = 0;
-                        selectSlice(newIdx3);
-                        syncMarkersToDs();
-                        updateSlicePadLeds();
-                        announce("Slice " + (selectedSlice + 1) + "/" + sliceCount);
-                    }
+                if (lazyChopping) break; /* No jog while chopping */
+                /* Jog cycles through modes: Even -> Auto -> Lazy -> BPM -> Even */
+                if (delta > 0) {
+                    if (sliceMode === SLICE_MODE_EVEN) sliceMode = SLICE_MODE_AUTO;
+                    else if (sliceMode === SLICE_MODE_AUTO) sliceMode = SLICE_MODE_LAZY;
+                    else if (sliceMode === SLICE_MODE_LAZY) sliceMode = SLICE_MODE_BPM;
+                    else sliceMode = SLICE_MODE_EVEN;
                 } else {
-                    /* Navigate between menu items */
-                    var maxMenuIdx = (sliceMode === SLICE_MODE_BPM) ? 3 : 2;
-                    sliceMenuIndex += (delta > 0 ? 1 : -1);
-                    if (sliceMenuIndex < 0) sliceMenuIndex = 0;
-                    if (sliceMenuIndex > maxMenuIdx) sliceMenuIndex = maxMenuIdx;
-                    var param2Name = sliceMode === SLICE_MODE_BPM ? "BPM" : (sliceMode === SLICE_MODE_LAZY ? "Sub-mode" : (sliceMode === SLICE_MODE_EVEN ? "Count" : "Thresh"));
-                    var itemNames = sliceMode === SLICE_MODE_BPM
-                        ? ["Mode", "BPM", "Div", "Select"]
-                        : ["Mode", param2Name, "Select"];
-                    announce(itemNames[sliceMenuIndex]);
+                    if (sliceMode === SLICE_MODE_EVEN) sliceMode = SLICE_MODE_BPM;
+                    else if (sliceMode === SLICE_MODE_BPM) sliceMode = SLICE_MODE_LAZY;
+                    else if (sliceMode === SLICE_MODE_LAZY) sliceMode = SLICE_MODE_AUTO;
+                    else sliceMode = SLICE_MODE_EVEN;
                 }
+                if (sliceMode === SLICE_MODE_LAZY) { lazySub = LAZY_SUB_CHOP; lazyChopping = false; }
+                sliceCount = 1; selectedSlice = 0; sliceBoundaries = []; slicePadOffset = 0;
+                recomputeSliceBoundaries();
+                selectSlice(0);
+                syncMarkersToDs();
+                updateSlicePadLeds();
+                var modeNames = ["Even", "Auto", "Lazy", "BPM"];
+                announce(modeNames[sliceMode] || "Even");
                 break;
         }
         return;
@@ -3531,6 +3471,7 @@ function handleCC(cc, value) {
                     switchView(VIEW_JOG_SHIFT_MENU);
                 } else {
                     jogMenuIndex = 0;
+                    jogMenuScrollOffset = 0;
                     switchView(VIEW_JOG_MENU);
                 }
                 break;
@@ -3567,17 +3508,6 @@ function handleCC(cc, value) {
                 showStatus(loopSelectedField === 0 ? "Loop Point" : "Loop End", 30);
                 break;
 
-            case VIEW_SLICE:
-                /* Toggle editing of current menu item */
-                sliceMenuEditing = !sliceMenuEditing;
-                if (sliceMenuEditing) {
-                    var edit2Name = sliceMode === SLICE_MODE_LAZY ? "Sub-mode" : (sliceMode === SLICE_MODE_EVEN ? "Count" : "Threshold");
-                    var editNames = ["Editing Mode", "Editing " + edit2Name, "Editing Slice"];
-                    announce(editNames[sliceMenuIndex]);
-                } else {
-                    announce("Navigate");
-                }
-                break;
 
             case VIEW_OPEN_FILE:
                 if (openFileBrowserState) {
@@ -3620,12 +3550,10 @@ function handleCC(cc, value) {
         if (delta === 0) return;
 
         if (currentView === VIEW_BPM_TRIM) {
-            /* E1 in BPM trim: adjust BPM (normal=±1, shift=±0.1) */
-            bpm += delta * (shiftHeld ? 0.1 : 1.0);
-            if (bpm < 20) bpm = 20;
-            if (bpm > 999) bpm = 999;
-            bpm = Math.round(bpm * 10) / 10;
-            showKnobStatus(0, "BPM:" + bpm.toFixed(1));
+            var step = shiftHeld ? 1 : getBeatStepSamples();
+            adjustMarker(0, delta * step);
+            showKnobStatus(0, "Start:" + formatTime(startSample));
+            refreshWaveform();
         } else if (currentView === VIEW_TRIM) {
             var step = shiftHeld ? 1 : getCoarseStep();
             adjustMarker(0, delta * step);
@@ -3675,11 +3603,10 @@ function handleCC(cc, value) {
         if (delta === 0) return;
 
         if (currentView === VIEW_BPM_TRIM) {
-            /* E2 in BPM trim: cycle beat division */
-            beatDivIndex += (delta > 0 ? 1 : -1);
-            if (beatDivIndex < 0) beatDivIndex = BEAT_DIVISIONS.length - 1;
-            if (beatDivIndex >= BEAT_DIVISIONS.length) beatDivIndex = 0;
-            showKnobStatus(1, "Div:" + BEAT_DIVISION_LABELS[beatDivIndex]);
+            var step = shiftHeld ? 1 : getBeatStepSamples();
+            adjustMarker(1, delta * step);
+            showKnobStatus(1, "End:" + formatTime(endSample));
+            refreshWaveform();
         } else if (currentView === VIEW_TRIM) {
             var step = shiftHeld ? 1 : getCoarseStep();
             adjustMarker(1, delta * step);
@@ -3728,7 +3655,7 @@ function handleCC(cc, value) {
         var delta = decodeDelta(value);
         if (delta === 0) return;
 
-        if (currentView === VIEW_TRIM || currentView === VIEW_SLICE) {
+        if (currentView === VIEW_TRIM || currentView === VIEW_BPM_TRIM || currentView === VIEW_SLICE) {
             var wasZero = (zoomLevel <= 0);
             zoomLevel += delta * ZOOM_STEP;
             if (zoomLevel < 0) zoomLevel = 0;
@@ -3770,19 +3697,55 @@ function handleCC(cc, value) {
 
     /* E5 turn: gain (trim/loop) | threshold (slice auto) | Shift+E5: normalize */
     if (cc === CC_E5) {
-        if (currentView === VIEW_SLICE && sliceMode === SLICE_MODE_AUTO) {
+        if (currentView === VIEW_BPM_TRIM) {
             var delta = decodeDelta(value);
             if (delta === 0) return;
-            var step = shiftHeld ? 0.1 : 1.0;
-            sliceThreshold += delta * step;
-            sliceThreshold = Math.round(sliceThreshold * 10) / 10;
-            if (sliceThreshold < 0.1) sliceThreshold = 0.1;
-            if (sliceThreshold > 100) sliceThreshold = 100;
-            recomputeSliceBoundaries();
-            selectSlice(selectedSlice);
-            syncMarkersToDs();
-            updateSlicePadLeds();
-            showKnobStatus(4, "T:" + sliceThreshold.toFixed(1));
+            bpm += delta * (shiftHeld ? 0.1 : 1.0);
+            if (bpm < 20) bpm = 20;
+            if (bpm > 999) bpm = 999;
+            bpm = Math.round(bpm * 10) / 10;
+            showKnobStatus(4, "BPM:" + bpm.toFixed(1));
+            return;
+        }
+        if (currentView === VIEW_SLICE && !lazyChopping) {
+            var delta = decodeDelta(value);
+            if (delta === 0) return;
+            if (sliceMode === SLICE_MODE_BPM) {
+                bpm += delta * (shiftHeld ? 0.1 : 1.0);
+                if (bpm < 20) bpm = 20;
+                if (bpm > 999) bpm = 999;
+                bpm = Math.round(bpm * 10) / 10;
+                recomputeSliceBoundaries();
+                selectSlice(selectedSlice);
+                syncMarkersToDs();
+                updateSlicePadLeds();
+                showKnobStatus(4, "BPM:" + bpm.toFixed(1));
+            } else if (sliceMode === SLICE_MODE_EVEN) {
+                sliceCount += (delta > 0 ? 1 : -1);
+                if (sliceCount < 1) sliceCount = 1;
+                if (sliceCount > 128) sliceCount = 128;
+                recomputeSliceBoundaries();
+                selectSlice(selectedSlice);
+                syncMarkersToDs();
+                updateSlicePadLeds();
+                showKnobStatus(4, "Count:" + sliceCount);
+            } else if (sliceMode === SLICE_MODE_AUTO) {
+                var step = shiftHeld ? 0.1 : 1.0;
+                sliceThreshold += delta * step;
+                sliceThreshold = Math.round(sliceThreshold * 10) / 10;
+                if (sliceThreshold < 0.1) sliceThreshold = 0.1;
+                if (sliceThreshold > 100) sliceThreshold = 100;
+                recomputeSliceBoundaries();
+                selectSlice(selectedSlice);
+                syncMarkersToDs();
+                updateSlicePadLeds();
+                showKnobStatus(4, "T:" + sliceThreshold.toFixed(1));
+            } else if (sliceMode === SLICE_MODE_LAZY) {
+                lazySub = (lazySub === LAZY_SUB_CHOP) ? LAZY_SUB_PLAY : LAZY_SUB_CHOP;
+                lazyChopping = false;
+                updateSlicePadLeds();
+                showKnobStatus(4, lazySub === LAZY_SUB_CHOP ? "Chop" : "Play");
+            }
             return;
         }
         if (currentView === VIEW_TRIM || currentView === VIEW_LOOP) {
@@ -3802,6 +3765,43 @@ function handleCC(cc, value) {
             }
         }
         return;
+    }
+
+    /* E6 (Knob 6): Division in VIEW_BPM_TRIM and VIEW_SLICE (BPM mode) */
+    if (cc === CC_E6) {
+        var delta = decodeDelta(value);
+        if (delta !== 0) {
+            if (currentView === VIEW_BPM_TRIM ||
+                (currentView === VIEW_SLICE && sliceMode === SLICE_MODE_BPM && !lazyChopping)) {
+                beatDivIndex += (delta > 0 ? 1 : -1);
+                if (beatDivIndex < 0) beatDivIndex = 0;
+                if (beatDivIndex >= BEAT_DIVISIONS.length) beatDivIndex = BEAT_DIVISIONS.length - 1;
+                if (currentView === VIEW_SLICE) {
+                    recomputeSliceBoundaries();
+                    selectSlice(selectedSlice);
+                    syncMarkersToDs();
+                    updateSlicePadLeds();
+                }
+                showKnobStatus(5, "Div:" + BEAT_DIVISION_LABELS[beatDivIndex]);
+                return;
+            }
+        }
+        return; /* E6 has no function in other views */
+    }
+
+    /* E8 (Knob 8): Slice select in VIEW_SLICE */
+    if (cc === CC_E8) {
+        var delta = decodeDelta(value);
+        if (delta !== 0 && currentView === VIEW_SLICE && !lazyChopping) {
+            var newIdx = selectedSlice + (delta > 0 ? 1 : -1);
+            if (newIdx < 0) newIdx = 0;
+            if (newIdx >= sliceCount) newIdx = sliceCount - 1;
+            selectSlice(newIdx);
+            syncMarkersToDs();
+            updateSlicePadLeds();
+            showKnobStatus(7, "Slice " + (selectedSlice + 1) + "/" + sliceCount);
+            return;
+        }
     }
 
     /* E7/E8 twist actions: turn confirms/cancels pending action */
@@ -3856,14 +3856,14 @@ function handleNote(note, velocity) {
      * Only the most recently pressed pad owns playback — releasing
      * an earlier pad while a newer one is held does nothing. */
     if (note >= PAD_NOTE_MIN && note <= PAD_NOTE_MAX) {
-        if (currentView === VIEW_TRIM || currentView === VIEW_LOOP) {
+        if (currentView === VIEW_TRIM || currentView === VIEW_LOOP || currentView === VIEW_BPM_TRIM) {
             if (velocity > 0) {
                 setLED(note, PAD_COLOR_PLAY);
                 activePadNote = note;
                 if (shiftHeld) {
-                    /* Shift+pad: preview from 3% before end marker */
+                    /* Shift+pad: preview from before end marker (~20% of selection) */
                     var selLen = endSample - startSample;
-                    var previewLen = Math.min(Math.max(Math.floor(selLen * 0.05), Math.floor(sampleRate / 4)), sampleRate * 5);
+                    var previewLen = Math.min(Math.max(Math.floor(selLen * 0.20), sampleRate), sampleRate * 20);
                     var from = endSample - previewLen;
                     if (from < startSample) from = startSample;
                     startPlaybackFrom(from);
