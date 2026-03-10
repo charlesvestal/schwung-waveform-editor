@@ -258,7 +258,7 @@ var normalizeItems = ["Normalize", "Cancel"];
 var normalizeIndex = 0;
 
 /* Jog-click context menus (VIEW_TRIM) */
-var jogMenuItems = ["Copy", "Cut", "Truncate", "Normalize"];
+var jogMenuItems = ["Copy", "Cut", "Truncate", "Normalize Sel"];
 var jogMenuIndex = 0;
 var jogShiftMenuItems = ["Paste (insert)", "Export"];
 var jogShiftMenuIndex = 0;
@@ -2846,6 +2846,18 @@ function doNormalize() {
     updateLeds();
 }
 
+/**
+ * Normalize selected region to -0.3dBFS.
+ */
+function doNormalizeSelection() {
+    host_module_set_param("normalize_selection", "1");
+    showStatus("Norm. Selection", 60);
+    refreshFileInfo();
+    refreshState();
+    invalidateWaveform();
+    updateLeds();
+}
+
 
 /* ============ MIDI Input Handling ============ */
 
@@ -3415,7 +3427,7 @@ function handleCC(cc, value) {
                     case 0: doCopy(); break;
                     case 1: doCut(); break;
                     case 2: doTrim(); break;
-                    case 3: doNormalize(); break;
+                    case 3: doNormalizeSelection(); break;
                 }
                 switchView(VIEW_TRIM);
                 break;

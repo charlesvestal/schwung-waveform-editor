@@ -1437,37 +1437,51 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
     }
 
     if (strcmp(key, "normalize_selection") == 0) {
-        /* Normalize only the selected region [start_sample, end_sample] */
+        /* Normalize only the selected region [start_sample, end_sample] to target dBFS */
+        if (!inst->audio_data || inst->audio_frames <= 0) return;
+
+        /* Clamp selection to valid frame range */
         int start = inst->start_sample;
         int end   = inst->end_sample;
         if (start < 0) start = 0;
         if (end > inst->audio_frames) end = inst->audio_frames;
-        if (start >= end) { plugin_log("NormSel: empty selection"); return; }
-        if (!inst->audio_data) return;
+        if (start >= end) {
+            plugin_log("NormalizeSel: empty selection");
+            return;
+        }
 
         save_undo(inst);
 
-        float sel_peak = compute_peak_db(inst->audio_data + start * SAMPLES_PER_FRAME,
-                                         end - start);
-        if (sel_peak <= -96.0f) { plugin_log("NormSel: selection silent"); return; }
+        /* Find peak within selection */
+        float current_peak_db = compute_peak_db(inst->audio_data + start * SAMPLES_PER_FRAME,
+                                                end - start);
+        if (current_peak_db <= -96.0f) {
+            plugin_log("NormalizeSel: selection is silent");
+            return;
+        }
 
-        float gain_db  = NORMALIZE_TARGET_DB - sel_peak;
-        float lin_gain = powf(10.0f, gain_db / 20.0f);
-        int   n_samp   = (end - start) * SAMPLES_PER_FRAME;
-        int16_t *ptr   = inst->audio_data + start * SAMPLES_PER_FRAME;
-        for (int i = 0; i < n_samp; i++) {
-            float s = (float)ptr[i] * lin_gain;
-            if (s >  32767.0f) s =  32767.0f;
+        /* Calculate gain needed to reach target */
+        float gain_needed_db = NORMALIZE_TARGET_DB - current_peak_db;
+        float linear_gain    = powf(10.0f, gain_needed_db / 20.0f);
+        int   total_samples  = (end - start) * SAMPLES_PER_FRAME;
+        int16_t *ptr         = inst->audio_data + start * SAMPLES_PER_FRAME;
+
+        for (int i = 0; i < total_samples; i++) {
+            float s = (float)ptr[i] * linear_gain;
+            if (s > 32767.0f) s = 32767.0f;
             if (s < -32768.0f) s = -32768.0f;
             ptr[i] = (int16_t)s;
         }
-        inst->dirty   = 1;
+
+        inst->dirty = 1;
         inst->peak_db = compute_peak_db(inst->audio_data, inst->audio_frames);
         compute_waveform(inst, 128);
+
         {
             char log_buf[128];
             snprintf(log_buf, sizeof(log_buf),
-                     "NormSel: applied %.1f dB to frames %d-%d", gain_db, start, end);
+                     "NormalizeSel: applied %.1f dB, peak now %.1f dB",
+                     gain_needed_db, inst->peak_db);
             plugin_log(log_buf);
         }
         return;
