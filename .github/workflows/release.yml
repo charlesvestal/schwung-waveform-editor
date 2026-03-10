@@ -15,6 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Verify version match
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -25,8 +28,10 @@ jobs:
           fi
           echo "Version check passed: $TAG_VERSION"
 
-      - name: Build
-        run: ./scripts/build.sh
+      - name: Build with Docker
+        run: |
+          docker build -t module-builder -f scripts/Dockerfile .
+          docker run --rm -v "$PWD:/build" -w /build module-builder ./scripts/build.sh
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
