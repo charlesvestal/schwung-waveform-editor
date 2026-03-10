@@ -42,7 +42,7 @@ cd move-anything-waveform-editor
 |---------|----------|
 | Jog wheel | Scroll view when zoomed in (Shift: fine scroll) |
 | Jog click | Edit menu: Copy, Cut, Truncate, Normalize Sel |
-| Shift+Jog click | Paste/Export menu: Paste (insert), Export |
+| Shift+Jog click | Paste/Export menu: Paste (insert), Paste (overwrite), Export |
 | Knob 1 | Move start marker |
 | Knob 2 | Move end marker |
 | Knob 3 | Zoom (Shift: vertical scale) |

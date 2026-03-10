@@ -260,7 +260,7 @@ var normalizeIndex = 0;
 /* Jog-click context menus (VIEW_TRIM) */
 var jogMenuItems = ["Copy", "Cut", "Truncate", "Normalize Sel"];
 var jogMenuIndex = 0;
-var jogShiftMenuItems = ["Paste (insert)", "Export"];
+var jogShiftMenuItems = ["Paste (insert)", "Paste (overwrite)", "Export"];
 var jogShiftMenuIndex = 0;
 
 /* Confirm save overlay */
@@ -2322,6 +2322,23 @@ function doPaste() {
 }
 
 /**
+ * Paste clipboard at cursor (overwrite at start_sample, file length unchanged).
+ */
+function doPasteOverwrite() {
+    refreshState();
+    if (!hasClipboard) {
+        showStatus("Nothing to paste", 45);
+        return;
+    }
+    host_module_set_param("paste_overwrite", "1");
+    showStatus("Pasted (overwrite)", 60);
+    refreshFileInfo();
+    refreshState();
+    invalidateWaveform();
+    updateLeds();
+}
+
+/**
  * Save As — prompt for filename, copy file to permanent location.
  * Opens the text entry keyboard with a pre-filled timestamp name.
  */
@@ -3423,7 +3440,8 @@ function handleCC(cc, value) {
             case VIEW_JOG_SHIFT_MENU:
                 switch (jogShiftMenuIndex) {
                     case 0: doPaste(); break;
-                    case 1: doExport(); break;
+                    case 1: doPasteOverwrite(); break;
+                    case 2: doExport(); break;
                 }
                 switchView(VIEW_TRIM);
                 break;
