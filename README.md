@@ -39,6 +39,8 @@ cd move-anything-waveform-editor
 
 ## Controls
 
+### Trim View
+
 | Control | Function |
 |---------|----------|
 | Jog wheel | Scroll view when zoomed in (Shift: fine scroll) |
@@ -46,18 +48,50 @@ cd move-anything-waveform-editor
 | Shift+Jog click | Paste/Export menu: Paste (insert), Paste (overwrite), Export |
 | Knob 1 | Move start marker |
 | Knob 2 | Move end marker |
-| Knob 3 | Zoom (Shift: vertical scale) |
-| Knob 4 | Gain (Shift: normalize) |
-| Any pad | Hold to audition (Shift: full file) |
+| Knob 3 | Zoom |
+| Knob 4 | Vertical scale |
+| Knob 5 | Gain (Shift: normalize) |
+| Any pad | Hold to audition (Shift: preview near end) |
 | Mute | Zero out selection |
 | Copy | Copy selection |
-| Shift+Copy | Paste at cursor |
+| Shift+Copy | Paste at cursor (insert) |
 | Delete | Cut selection |
+| Left/Right | Nudge selection by coarse step |
+| Shift+L/R | Jump selection by one selection length |
 | Loop | Toggle loop mode |
 | Capture | Save (overwrite) |
 | Shift+Capture | Export selection |
 | Undo | Undo last edit |
 | Back | Exit (warns on unsaved) |
+
+### BPM Step Mode (via Jog click → BPM Step)
+
+| Control | Function |
+|---------|----------|
+| Jog wheel | Scroll view when zoomed in |
+| Jog click | Toggle active marker (Start/End) |
+| Knob 1 | Move start marker (in beat steps) |
+| Knob 2 | Move end marker (in beat steps) |
+| Knob 3 | Zoom |
+| Knob 5 | Set BPM (Shift: fine ±0.1) |
+| Knob 6 | Set beat division (1/1–1/16) |
+| Left/Right | Move active marker by one division |
+| Back | Return to Trim view |
+
+### Slice Mode
+
+| Control | Function |
+|---------|----------|
+| Jog wheel | Cycle slice mode (Even / Auto / Lazy / BPM) |
+| Knob 1 | Move slice start boundary |
+| Knob 2 | Move slice end boundary |
+| Knob 3 | Zoom |
+| Knob 4 | Vertical scale |
+| Knob 5 | Count (Even) / Threshold (Auto) / Chop-Play (Lazy) / BPM value (BPM) |
+| Knob 6 | Beat division (BPM mode only) |
+| Knob 8 | Select slice |
+| Left/Right | Previous / next slice |
+| Pads | Audition slice (hold) |
 
 ## Header Indicators
 
