@@ -182,8 +182,9 @@
     {
       "title": "Saving",
       "lines": [
-        "Sample: save file",
-        "  (overwrite confirm)",
+        "Sample: open save menu",
+        "  with editable filename",
+        "  and save action",
         "",
         "Shift+Capture: export",
         "  selection to a",
@@ -195,8 +196,13 @@
         "  REX Loop (if Rex",
         "  module installed)",
         "",
-        "Back: exit (warns if",
-        "  unsaved changes)"
+        "Saved files go to",
+        "  UserLibrary/Recordings",
+        "",
+        "Back: hide (keeps DSP",
+        "  alive). Close Session",
+        "  from menu to fully",
+        "  exit."
       ]
     }
   ]

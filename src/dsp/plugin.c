@@ -1155,9 +1155,11 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         char out_path[512];
         make_edit_filename(inst->file_path, out_path, (int)sizeof(out_path));
 
-        /* Write the selection to file */
+        /* Write the selection as PCM 16-bit (internal format).
+         * Always use PCM so exported files are compatible with rex-encode
+         * and other tools that may not support IEEE float WAV. */
         if (write_wav(out_path, inst->audio_data + start * SAMPLES_PER_FRAME, copy_frames,
-                      inst->sample_rate, inst->orig_format, inst->orig_bits,
+                      inst->sample_rate, 1, 16,
                       inst->orig_channels) == 0) {
             const char *out_name = basename_ptr(out_path);
             strncpy(inst->copy_result, out_name,

@@ -209,9 +209,9 @@ var sliceMenuEditing = false;
 var slicePadOffset = 0;  /* pad bank offset (multiples of 32) */
 
 /* Scratch file — all recordings go here, user "Save As" to keep */
-var SCRATCH_DIR = "/data/UserData/UserLibrary/Samples/Move Everything/Recordings";
+var SCRATCH_DIR = "/data/UserData/UserLibrary/Recordings";
 var SCRATCH_PATH = SCRATCH_DIR + "/.wave-edit-scratch.wav";
-var SAVE_DIR = SCRATCH_DIR;  /* default destination for "Save As" */
+var SAVE_DIR = SCRATCH_DIR;  /* default destination for saved files */
 
 /* Record state */
 var isRecordedFile = false;      /* true if current file came from recording (unsaved) */
@@ -500,7 +500,7 @@ function formatSelDuration() {
  */
 function showStatus(msg, frames) {
     statusMsg = msg;
-    statusTimer = frames || 60;
+    statusTimer = (frames || 60) * 3;
     announce(msg);
 }
 
@@ -1893,27 +1893,47 @@ function ensureSourceSaved() {
         ? SAVE_DIR
         : openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
     var destPath = destDir + "/" + targetName;
-    /* Apply pending edits (gain etc) */
+    /* Apply pending edits (gain etc) — use blocking call so gain is applied
+     * before the save that follows */
     if (gainDb !== 0.0) {
-        host_module_set_param("apply_gain", "1");
-    }
-    host_module_set_param("save", "1");
-    if (isScratchFile() || openedFilePath !== destPath) {
-        /* Name changed or scratch — copy to new path */
-        if (typeof host_system_cmd === "function") {
-            host_ensure_dir(destDir);
-            var result = host_system_cmd("cp '" + sanitizeForShell(openedFilePath) + "' '" + sanitizeForShell(destPath) + "'");
-            if (result === 0) {
-                openedFilePath = destPath;
-                host_module_set_param("file_path", destPath);
-                refreshFileInfo();
-                isRecordedFile = false;
-                return destPath;
-            }
+        if (typeof host_module_set_param_blocking === "function") {
+            host_module_set_param_blocking("apply_gain", "1", 5000);
+        } else {
+            host_module_set_param("apply_gain", "1");
+            host_module_get_param("dirty"); /* sync barrier */
         }
-        return "";
     }
-    /* Same name, same path — already saved in place */
+    if (isScratchFile() || openedFilePath !== destPath) {
+        /* Name changed or scratch — use save_as to write directly to dest.
+         * The DSP runs as root and chowns to ableton, so this avoids the
+         * race condition of save + cp where cp can hit a root-owned file. */
+        if (typeof host_ensure_dir === "function") {
+            host_ensure_dir(destDir);
+        }
+        if (typeof host_module_set_param_blocking === "function") {
+            host_module_set_param_blocking("save_as", destPath, 10000);
+        } else {
+            host_module_set_param("save_as", destPath);
+            host_module_get_param("dirty"); /* sync barrier */
+        }
+        /* Verify the file was written */
+        if (typeof host_file_exists === "function" && !host_file_exists(destPath)) {
+            showStatus("Save failed: write error", 60);
+            return "";
+        }
+        openedFilePath = destPath;
+        host_module_set_param("file_path", destPath);
+        refreshFileInfo();
+        isRecordedFile = false;
+        return destPath;
+    }
+    /* Same name, same path — save in place with sync barrier */
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("save", "1", 10000);
+    } else {
+        host_module_set_param("save", "1");
+        host_module_get_param("dirty"); /* sync barrier */
+    }
     isRecordedFile = false;
     refreshState();
     refreshFileInfo();
@@ -2027,9 +2047,19 @@ function returnToSaveView() {
  */
 function doSave() {
     if (gainDb !== 0.0) {
-        host_module_set_param("apply_gain", "1");
+        if (typeof host_module_set_param_blocking === "function") {
+            host_module_set_param_blocking("apply_gain", "1", 5000);
+        } else {
+            host_module_set_param("apply_gain", "1");
+            host_module_get_param("dirty"); /* sync barrier */
+        }
     }
-    host_module_set_param("save", "1");
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("save", "1", 10000);
+    } else {
+        host_module_set_param("save", "1");
+        host_module_get_param("dirty"); /* sync barrier */
+    }
     isRecordedFile = false;
     var folder = leafFolder(openedFilePath);
     showStatus("Saved to " + folder, 90);
@@ -2219,27 +2249,37 @@ function doSaveAs(onDone) {
                 ? SAVE_DIR
                 : openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
             var destPath = destDir + "/" + destName;
-            /* Apply pending edits before copying */
+            /* Apply pending edits before saving */
             if (gainDb !== 0.0) {
-                host_module_set_param("apply_gain", "1");
-            }
-            host_module_set_param("save", "1");
-            /* Copy to destination */
-            if (typeof host_system_cmd === "function") {
-                host_ensure_dir(destDir);
-                var result = host_system_cmd("cp '" + sanitizeForShell(openedFilePath) + "' '" + sanitizeForShell(destPath) + "'");
-                if (result === 0) {
-                    openedFilePath = destPath;
-                    host_module_set_param("file_path", destPath);
-                    refreshFileInfo();
-                    isRecordedFile = false;
-                    var destFolder = leafFolder(destPath);
-                    showStatus("Saved to " + destFolder, 90);
-                    announce("Saved to " + destFolder);
-                    if (onDone) onDone();
+                if (typeof host_module_set_param_blocking === "function") {
+                    host_module_set_param_blocking("apply_gain", "1", 5000);
                 } else {
-                    showStatus("Save failed", 60);
+                    host_module_set_param("apply_gain", "1");
+                    host_module_get_param("dirty"); /* sync barrier */
                 }
+            }
+            /* Use save_as to write directly to dest (DSP runs as root + chowns).
+             * Avoids race condition of save + cp. */
+            if (typeof host_ensure_dir === "function") {
+                host_ensure_dir(destDir);
+            }
+            if (typeof host_module_set_param_blocking === "function") {
+                host_module_set_param_blocking("save_as", destPath, 10000);
+            } else {
+                host_module_set_param("save_as", destPath);
+                host_module_get_param("dirty"); /* sync barrier */
+            }
+            if (typeof host_file_exists === "function" && !host_file_exists(destPath)) {
+                showStatus("Save failed", 60);
+            } else {
+                openedFilePath = destPath;
+                host_module_set_param("file_path", destPath);
+                refreshFileInfo();
+                isRecordedFile = false;
+                var destFolder = leafFolder(destPath);
+                showStatus("Saved to " + destFolder, 90);
+                announce("Saved to " + destFolder);
+                if (onDone) onDone();
             }
         },
         onCancel: function() {
@@ -2307,8 +2347,14 @@ function exportSlicedWavs(overrideName) {
         syncMarkersToDs();
         host_module_get_param("dirty"); /* sync barrier */
 
-        /* Trigger export — DSP writes timestamped file, returns name in copy_result */
-        host_module_set_param("export", "1");
+        /* Trigger export — DSP writes timestamped file, returns name in copy_result.
+         * Use blocking call to ensure export completes before reading result. */
+        if (typeof host_module_set_param_blocking === "function") {
+            host_module_set_param_blocking("export", "1", 10000);
+        } else {
+            host_module_set_param("export", "1");
+            host_module_get_param("dirty"); /* sync barrier */
+        }
         var result = host_module_get_param("copy_result");
 
         if (!result || result === "ERROR") continue;
@@ -2371,7 +2417,13 @@ function exportRexLoop(overrideName) {
     endSample = sliceRegionEnd;
     syncMarkersToDs();
     host_module_get_param("dirty"); /* sync barrier */
-    host_module_set_param("export", "1");
+    /* Use blocking call to ensure export completes before reading result */
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("export", "1", 10000);
+    } else {
+        host_module_set_param("export", "1");
+        host_module_get_param("dirty"); /* sync barrier */
+    }
     var exportResult = host_module_get_param("copy_result");
 
     /* Restore markers */
