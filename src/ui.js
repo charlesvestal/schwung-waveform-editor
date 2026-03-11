@@ -1936,6 +1936,18 @@ function ensureSourceSaved() {
         ? SAVE_DIR
         : openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
     var destPath = destDir + "/" + targetName;
+    /* In trim/loop view, apply trim if markers don't span the full file */
+    if ((saveReturnView === VIEW_TRIM || saveReturnView === VIEW_LOOP) &&
+        (startSample > 0 || endSample < totalFrames)) {
+        if (typeof host_module_set_param_blocking === "function") {
+            host_module_set_param_blocking("trim", "1", 5000);
+        } else {
+            host_module_set_param("trim", "1");
+            host_module_get_param("dirty"); /* sync barrier */
+        }
+        refreshFileInfo();
+        invalidateWaveform();
+    }
     /* Apply pending edits (gain etc) — use blocking call so gain is applied
      * before the save that follows */
     if (gainDb !== 0.0) {
