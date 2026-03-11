@@ -40,7 +40,7 @@ import * as os from 'os';
 import {
     MidiNoteOn, MidiCC,
     MoveShift, MoveMainKnob, MoveMainButton, MoveBack,
-    MoveCapture, MoveRec, MoveSample, MoveUndo, MoveLoop, MoveMute,
+    MoveCapture, MoveRec, MoveSample, MoveUndo, MoveLoop, MoveCopy, MoveMute,
     MoveLeft, MoveRight, MoveDown, MoveUp,
     MovePads,
     MoveStep1,
@@ -98,6 +98,7 @@ var CC_SHIFT = MoveShift;
 var CC_BACK = MoveBack;
 var CC_MUTE = MoveMute;
 var CC_CAPTURE = MoveCapture;
+var CC_COPY = MoveCopy;
 var CC_UNDO = MoveUndo;
 var CC_LOOP = MoveLoop;
 var CC_LEFT = MoveLeft;
@@ -954,6 +955,8 @@ function recomputeSliceBoundaries() {
         if (sliceBoundaries.length < 2) {
             sliceBoundaries = [sliceRegionStart, sliceRegionEnd];
             sliceCount = 1;
+        } else {
+            sliceCount = sliceBoundaries.length - 1;
         }
     } else if (sliceMode === SLICE_MODE_EVEN) {
         var regionLen = sliceRegionEnd - sliceRegionStart;
@@ -3103,6 +3106,48 @@ function handleCC(cc, value) {
         return;
     }
 
+    /* Copy button: BPM view = BPM from filename / BPM from selection; Trim/Loop = copy/paste */
+    if (cc === CC_COPY && value > 0) {
+        if (currentView === VIEW_BPM_TRIM) {
+            if (shiftHeld) {
+                /* Shift+Copy: estimate BPM from selection length (assumes 1 bar in 4/4) */
+                var selLen = endSample - startSample;
+                if (selLen <= 0) { showStatus("Empty selection", 60); return; }
+                var estimatedBpm = 240.0 / (selLen / sampleRate); /* 4 beats × 60s */
+                estimatedBpm = Math.round(estimatedBpm * 10) / 10;
+                if (estimatedBpm < 20 || estimatedBpm > 999) {
+                    showStatus("BPM out of range", 60); return;
+                }
+                bpm = estimatedBpm;
+                showStatus("BPM: " + bpm.toFixed(1), 90);
+            } else {
+                /* Copy: extract BPM from filename (e.g. "loop_120bpm_dry.wav" → 120) */
+                var bpmMatch = fileName.match(/(\d+(?:\.\d+)?)\s*bpm/i);
+                if (bpmMatch) {
+                    var detectedBpm = parseFloat(bpmMatch[1]);
+                    if (detectedBpm >= 20 && detectedBpm <= 999) {
+                        bpm = Math.round(detectedBpm * 10) / 10;
+                        showStatus("BPM: " + bpm.toFixed(1), 90);
+                    } else {
+                        showStatus("BPM out of range", 60);
+                    }
+                } else {
+                    showStatus("No BPM in filename", 60);
+                }
+            }
+            return;
+        }
+        if (currentView === VIEW_TRIM || currentView === VIEW_LOOP) {
+            if (shiftHeld) {
+                doPaste();
+                if (currentView === VIEW_LOOP) invalidateSeamWaveform();
+            } else {
+                doCopy();
+            }
+        }
+        return;
+    }
+
     /* Loop button */
     if (cc === CC_LOOP && value > 0) {
         if (currentView === VIEW_LOOP) {
@@ -3882,8 +3927,8 @@ function handleNote(note, velocity) {
                     startSample = sliceBoundaries[0];
                     endSample = sliceBoundaries[sliceCount];
                     playPos = startSample;
-                    syncMarkersToDs();
                     host_module_set_param("slice_state", "");
+                    syncMarkersToDs();
                 }
                 switchView(targetView);
             }
