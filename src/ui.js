@@ -346,6 +346,47 @@ function getSliceActions() {
     return ["Slices", "Drum Preset", "Cancel"];
 }
 
+/**
+ * Persist slice state to DSP so it survives hide/reconnect.
+ */
+function saveSliceState() {
+    var state = JSON.stringify({
+        mode: sliceMode,
+        count: sliceCount,
+        boundaries: sliceBoundaries,
+        regionStart: sliceRegionStart,
+        regionEnd: sliceRegionEnd,
+        selected: selectedSlice,
+        threshold: sliceThreshold,
+        padOffset: slicePadOffset
+    });
+    host_module_set_param("slice_state", state);
+}
+
+/**
+ * Restore slice state from DSP on reconnect.
+ * Returns true if state was restored, false if no saved state.
+ */
+function restoreSliceState() {
+    var raw = host_module_get_param("slice_state");
+    if (!raw || raw.length < 2) return false;
+    try {
+        var s = JSON.parse(raw);
+        if (!s.boundaries || s.boundaries.length < 2) return false;
+        sliceMode = s.mode || SLICE_MODE_EVEN;
+        sliceCount = s.count || 1;
+        sliceBoundaries = s.boundaries;
+        sliceRegionStart = s.regionStart || 0;
+        sliceRegionEnd = s.regionEnd || totalFrames;
+        selectedSlice = s.selected || 0;
+        sliceThreshold = s.threshold || 25.0;
+        slicePadOffset = s.padOffset || 0;
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 /* Loop state */
 var loopEnabled = false;
 var savedLoopState = false;
@@ -992,6 +1033,8 @@ function updateSlicePadLeds() {
             setLED(padNote, Black);
         }
     }
+    /* Persist slice state to DSP for reconnect */
+    saveSliceState();
 }
 
 /**
@@ -2759,6 +2802,11 @@ function handleCC(cc, value) {
 
     /* Back button */
     if (cc === CC_BACK && value > 0) {
+        /* Shift+Back: full exit (unload DSP) for quick iteration */
+        if (shiftHeld) {
+            fullExit();
+            return;
+        }
         /* During recording or record-ready, just hide — DSP keeps recording */
         if (recordState === "recording" || recordState === "ready") {
             exitEditor();
@@ -2784,11 +2832,9 @@ function handleCC(cc, value) {
                     updateSlicePadLeds();
                     showStatus("Chop done, " + sliceCount + " slices", 30);
                 } else {
-                    /* Restore selection spanning all slices */
-                    startSample = sliceBoundaries[0];
-                    endSample = sliceBoundaries[sliceCount];
-                    syncMarkersToDs();
-                    switchView(VIEW_TRIM);
+                    /* Hide — persist slice state to DSP for reconnect */
+                    saveSliceState();
+                    exitEditor();
                 }
                 break;
             case VIEW_MODE_MENU:
@@ -2950,6 +2996,8 @@ function handleCC(cc, value) {
                 startSample = sliceBoundaries[0];
                 endSample = sliceBoundaries[sliceCount];
                 syncMarkersToDs();
+                /* Clear persisted slice state — user explicitly left slice mode */
+                host_module_set_param("slice_state", "");
                 switchView(VIEW_TRIM);
             }
         }
@@ -3700,6 +3748,13 @@ globalThis.init = function() {
             currentView = VIEW_TRIM;
             selectedField = 0;
             announce("New Recording, press REC to record");
+        } else if (restoreSliceState()) {
+            /* Restored slice state from DSP — resume slice mode */
+            currentView = VIEW_SLICE;
+            selectedField = 0;
+            selectSlice(selectedSlice);
+            syncMarkersToDs();
+            announce("Wave Edit, slice mode, " + sliceCount + " slices");
         } else {
             currentView = VIEW_TRIM;
             selectedField = 0;

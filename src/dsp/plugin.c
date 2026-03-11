@@ -110,6 +110,7 @@ typedef struct {
     char copy_result[256];
     char load_error[256];
     char module_dir[512];
+    char slice_state[2048];     /* JSON blob for UI slice state persistence across reconnect */
 } instance_t;
 
 /* ============================================================================
@@ -1514,6 +1515,17 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         return;
     }
 
+    if (strcmp(key, "slice_state") == 0) {
+        /* Store UI slice state JSON for reconnect persistence */
+        if (val) {
+            strncpy(inst->slice_state, val, sizeof(inst->slice_state) - 1);
+            inst->slice_state[sizeof(inst->slice_state) - 1] = '\0';
+        } else {
+            inst->slice_state[0] = '\0';
+        }
+        return;
+    }
+
     {
         char log_buf[256];
         snprintf(log_buf, sizeof(log_buf),
@@ -1721,6 +1733,11 @@ static int v2_get_param(void *instance, const char *key, char *buf,
 
     if (strcmp(key, "dirty") == 0) {
         int n = snprintf(buf, (size_t)buf_len, "%d", inst->dirty ? 1 : 0);
+        return (n >= 0 && n < buf_len) ? n : -1;
+    }
+
+    if (strcmp(key, "slice_state") == 0) {
+        int n = snprintf(buf, (size_t)buf_len, "%s", inst->slice_state);
         return (n >= 0 && n < buf_len) ? n : -1;
     }
 
