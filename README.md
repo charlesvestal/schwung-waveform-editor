@@ -14,7 +14,7 @@ A full-featured audio waveform editor for your Ableton Move. Trim, gain adjust, 
 
 ## Prerequisites
 
-- [Move Everything](https://github.com/charlesvestal/move-anything) installed on your Ableton Move
+- [Move Everything](https://github.com/charlesvestal/move-everything) installed on your Ableton Move
 - SSH access enabled: http://move.local/development/ssh
 
 ## Install
@@ -29,7 +29,7 @@ A full-featured audio waveform editor for your Ableton Move. Trim, gain adjust, 
 ### Build from Source
 
 ```bash
-git clone https://github.com/charlesvestal/move-anything-waveform-editor
+git clone https://github.com/charlesvestal/move-everything-waveform-editor
 cd move-anything-waveform-editor
 ./scripts/build.sh
 ./scripts/install.sh
@@ -63,7 +63,7 @@ cd move-anything-waveform-editor
 
 ## Credits
 
-- **Move Everything framework**: [Charles Vestal](https://github.com/charlesvestal/move-anything)
+- **Move Everything framework**: [Charles Vestal](https://github.com/charlesvestal/move-everything)
 
 ## License
 
