@@ -22,15 +22,16 @@
  *   E4 (Knob 4)   - Adjust gain  |  Shift: normalize (confirm overlay)
  *   Any pad       - Hold to audition selection, release to stop
  *   Mute          - Mute (zero out) selection
- *   Copy          - Copy selection to clipboard
- *   Shift+Copy    - Paste clipboard at cursor (insert)
- *   Remove        - Cut selection to clipboard (delete)
+ *   Copy          - Copy selection to clipboard  |  Slice: copy selected slice
+ *   Shift+Copy    - Paste clipboard at cursor (insert)  |  Slice: paste overwrite into selected slice
+ *   Remove        - Cut selection to clipboard (delete)  |  Slice: cut selected slice out of file
+ *   Shift+Remove  - (Slice only) Paste clipboard insert before selected slice
+ *   Shift+L/R     - Jump selection by one length  |  Slice: move selected slice left/right
  *   Shift+Capture - Export selection to new file
  *   Capture       - Save (overwrite confirmation)
  *   Undo          - Undo last destructive operation
  *   Loop          - Toggle loop mode
- *   Left/Right    - Nudge selection by one coarse step
- *   Shift+L/R     - Jump selection by one selection length
+ *   Left/Right    - Nudge selection by one coarse step  |  Slice: select prev/next slice
  *   Back          - Navigate back / exit
  */
 
@@ -40,7 +41,7 @@ import * as os from 'os';
 import {
     MidiNoteOn, MidiCC,
     MoveShift, MoveMainKnob, MoveMainButton, MoveBack,
-    MoveCapture, MoveRec, MoveSample, MoveUndo, MoveLoop, MoveCopy, MoveMute,
+    MoveCapture, MoveRec, MoveSample, MoveUndo, MoveLoop, MoveCopy, MoveMute, MoveDelete,
     MoveLeft, MoveRight, MoveDown, MoveUp,
     MovePads,
     MoveStep1,
@@ -97,6 +98,7 @@ var CC_E8 = MoveKnob8;
 var CC_SHIFT = MoveShift;
 var CC_BACK = MoveBack;
 var CC_MUTE = MoveMute;
+var CC_DELETE = MoveDelete;
 var CC_CAPTURE = MoveCapture;
 var CC_COPY = MoveCopy;
 var CC_UNDO = MoveUndo;
@@ -1896,8 +1898,10 @@ function switchView(view) {
         if (hasExistingState) {
             sliceCount = sliceBoundaries.length - 1;
             if (selectedSlice >= sliceCount) selectedSlice = 0;
-            /* Lazy: only reset to CHOP if no real chops done yet (single default slice) */
-            if (sliceMode === SLICE_MODE_LAZY && sliceBoundaries.length < 3) lazySub = LAZY_SUB_CHOP;
+            /* Lazy: set sub-mode based on whether real chops have been done */
+            if (sliceMode === SLICE_MODE_LAZY) {
+                lazySub = (sliceBoundaries.length >= 3) ? LAZY_SUB_PLAY : LAZY_SUB_CHOP;
+            }
         } else {
             sliceCount = 1;
             selectedSlice = 0;
@@ -2449,6 +2453,200 @@ function doPasteOverwrite() {
     refreshState();
     invalidateWaveform();
     updateLeds();
+}
+
+/**
+ * Copy selected slice audio to clipboard.
+ */
+function doSliceCopy() {
+    startSample = sliceBoundaries[selectedSlice];
+    endSample = sliceBoundaries[selectedSlice + 1];
+    syncMarkersToDs();
+    host_module_set_param("copy", "1");
+    hasClipboard = true;
+    showStatus("Copied Slice " + (selectedSlice + 1), 60);
+    updateLeds();
+}
+
+/**
+ * Paste clipboard overwrite into selected slice (file length unchanged).
+ */
+function doSlicePasteOverwrite() {
+    if (!hasClipboard) { showStatus("Nothing to paste", 45); return; }
+    startSample = sliceBoundaries[selectedSlice];
+    endSample = sliceBoundaries[selectedSlice + 1];
+    syncMarkersToDs();
+    host_module_set_param("paste_overwrite", "1");
+    showStatus("Pasted \u2192 Slice " + (selectedSlice + 1), 60);
+    refreshFileInfo();
+    refreshState();
+    invalidateWaveform();
+    updateLeds();
+}
+
+/**
+ * Cut selected slice audio out of file, update boundaries.
+ * Requires at least 2 slices (can't cut the last one).
+ */
+function doSliceCut() {
+    if (sliceCount <= 1) { showStatus("Last slice", 45); return; }
+    var sliceStart = sliceBoundaries[selectedSlice];
+    var sliceEnd   = sliceBoundaries[selectedSlice + 1];
+    var sliceLen   = sliceEnd - sliceStart;
+    startSample = sliceStart;
+    endSample   = sliceEnd;
+    syncMarkersToDs();
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("cut", "1", 5000);
+    } else {
+        host_module_set_param("cut", "1");
+        host_module_get_param("dirty"); /* sync barrier: wait for cut to complete */
+    }
+    hasClipboard = true;
+    refreshFileInfo();
+    refreshState();
+    hasClipboard = true; /* re-assert: refreshState() may have read stale DSP state */
+    /* Remove end boundary of cut slice; shift all following boundaries left */
+    sliceBoundaries.splice(selectedSlice + 1, 1);
+    for (var i = selectedSlice + 1; i < sliceBoundaries.length; i++) {
+        sliceBoundaries[i] -= sliceLen;
+    }
+    sliceCount    = sliceBoundaries.length - 1;
+    sliceRegionEnd -= sliceLen;
+    if (selectedSlice >= sliceCount) selectedSlice = sliceCount - 1;
+    if (selectedSlice < 0) selectedSlice = 0;
+    selectSlice(selectedSlice);
+    syncMarkersToDs();
+    saveSliceState();
+    invalidateWaveform();
+    updateSlicePadLeds();
+    showStatus("Cut Slice", 60);
+    announce("Slice " + (selectedSlice + 1) + " of " + sliceCount);
+}
+
+/**
+ * Paste clipboard insert before selected slice, creating a new slice.
+ */
+function doSlicePasteInsert() {
+    if (!hasClipboard) { showStatus("Nothing to paste", 45); return; }
+    var oldTotal  = totalFrames;
+    var insertAt  = sliceBoundaries[selectedSlice];
+    startSample = insertAt;
+    endSample   = insertAt;
+    syncMarkersToDs();
+    host_module_get_param("dirty"); /* sync barrier: ensure markers are set before paste */
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("paste", "1", 5000);
+    } else {
+        host_module_set_param("paste", "1");
+        host_module_get_param("dirty"); /* sync barrier: wait for paste to complete */
+    }
+    refreshFileInfo();
+    refreshState();
+    var insertedFrames = totalFrames - oldTotal;
+    if (insertedFrames <= 0) { showStatus("Paste failed", 45); return; }
+    /* Shift existing boundaries from selectedSlice+1 onward, then insert new boundary */
+    for (var i = selectedSlice + 1; i < sliceBoundaries.length; i++) {
+        sliceBoundaries[i] += insertedFrames;
+    }
+    sliceBoundaries.splice(selectedSlice + 1, 0, insertAt + insertedFrames);
+    sliceCount     = sliceBoundaries.length - 1;
+    sliceRegionEnd += insertedFrames;
+    /* selectedSlice now points to the newly inserted slice */
+    selectSlice(selectedSlice);
+    syncMarkersToDs();
+    saveSliceState();
+    invalidateWaveform();
+    updateSlicePadLeds();
+    showStatus("Inserted Slice " + (selectedSlice + 1), 60);
+    announce("Slice " + (selectedSlice + 1) + " of " + sliceCount);
+}
+
+/**
+ * Move selected slice one position to the right (swap with next slice).
+ * Physically cuts slice i and re-inserts it after slice i+1.
+ * Net effect on boundaries: none. Only audio content is reordered.
+ */
+function doSliceMoveRight() {
+    if (selectedSlice >= sliceCount - 1) { showStatus("Last slice", 30); return; }
+    var sliceStart   = sliceBoundaries[selectedSlice];
+    var sliceEnd     = sliceBoundaries[selectedSlice + 1];
+    var nextEnd      = sliceBoundaries[selectedSlice + 2];
+    var insertPoint  = sliceStart + (nextEnd - sliceEnd); /* start + len of next slice */
+    startSample = sliceStart;
+    endSample   = sliceEnd;
+    syncMarkersToDs();
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("cut", "1", 5000);
+    } else {
+        host_module_set_param("cut", "1");
+        host_module_get_param("dirty"); /* sync barrier: wait for cut to complete */
+    }
+    hasClipboard = true;
+    refreshFileInfo();
+    startSample = insertPoint;
+    syncMarkersToDs();
+    host_module_get_param("dirty"); /* sync barrier: ensure markers are set before paste */
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("paste", "1", 5000);
+    } else {
+        host_module_set_param("paste", "1");
+        host_module_get_param("dirty"); /* sync barrier: wait for paste to complete */
+    }
+    refreshFileInfo();
+    refreshState();
+    selectedSlice++;
+    selectSlice(selectedSlice);
+    /* Adjust pad bank if needed */
+    if (selectedSlice >= slicePadOffset + 32) slicePadOffset = Math.floor(selectedSlice / 32) * 32;
+    syncMarkersToDs();
+    invalidateWaveform();
+    updateSlicePadLeds();
+    showStatus("Slice \u2192 " + (selectedSlice + 1), 30);
+    announce("Slice " + (selectedSlice + 1) + " of " + sliceCount);
+}
+
+/**
+ * Move selected slice one position to the left (swap with previous slice).
+ * Physically cuts slice i and re-inserts it before slice i-1.
+ * Net effect on boundaries: none. Only audio content is reordered.
+ */
+function doSliceMoveLeft() {
+    if (selectedSlice <= 0) { showStatus("First slice", 30); return; }
+    var sliceStart   = sliceBoundaries[selectedSlice];
+    var sliceEnd     = sliceBoundaries[selectedSlice + 1];
+    var insertPoint  = sliceBoundaries[selectedSlice - 1]; /* before previous slice */
+    startSample = sliceStart;
+    endSample   = sliceEnd;
+    syncMarkersToDs();
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("cut", "1", 5000);
+    } else {
+        host_module_set_param("cut", "1");
+        host_module_get_param("dirty"); /* sync barrier: wait for cut to complete */
+    }
+    hasClipboard = true;
+    refreshFileInfo();
+    startSample = insertPoint;
+    syncMarkersToDs();
+    host_module_get_param("dirty"); /* sync barrier: ensure markers are set before paste */
+    if (typeof host_module_set_param_blocking === "function") {
+        host_module_set_param_blocking("paste", "1", 5000);
+    } else {
+        host_module_set_param("paste", "1");
+        host_module_get_param("dirty"); /* sync barrier: wait for paste to complete */
+    }
+    refreshFileInfo();
+    refreshState();
+    selectedSlice--;
+    selectSlice(selectedSlice);
+    /* Adjust pad bank if needed */
+    if (selectedSlice < slicePadOffset) slicePadOffset = Math.floor(selectedSlice / 32) * 32;
+    syncMarkersToDs();
+    invalidateWaveform();
+    updateSlicePadLeds();
+    showStatus("\u2190 Slice " + (selectedSlice + 1), 30);
+    announce("Slice " + (selectedSlice + 1) + " of " + sliceCount);
 }
 
 /**
@@ -3119,7 +3317,7 @@ function handleCC(cc, value) {
         return;
     }
 
-    /* Copy button: Trim/Loop = copy/paste */
+    /* Copy button: Trim/Loop = copy/paste; Slice = copy/paste-overwrite slice */
     if (cc === CC_COPY && value > 0) {
         if (currentView === VIEW_TRIM || currentView === VIEW_LOOP) {
             if (shiftHeld) {
@@ -3127,6 +3325,24 @@ function handleCC(cc, value) {
                 if (currentView === VIEW_LOOP) invalidateSeamWaveform();
             } else {
                 doCopy();
+            }
+        } else if (currentView === VIEW_SLICE) {
+            if (shiftHeld) {
+                doSlicePasteOverwrite();
+            } else {
+                doSliceCopy();
+            }
+        }
+        return;
+    }
+
+    /* Remove (Delete) button: Slice = cut slice / paste-insert before slice */
+    if (cc === CC_DELETE && value > 0) {
+        if (currentView === VIEW_SLICE) {
+            if (shiftHeld) {
+                doSlicePasteInsert();
+            } else {
+                doSliceCut();
             }
         }
         return;
@@ -3323,21 +3539,30 @@ function handleCC(cc, value) {
             refreshWaveform();
             announce("Start:" + formatTime(startSample));
         } else if (currentView === VIEW_SLICE) {
-            /* Left/Right: select prev/next slice (wraps) */
-            var sliceDir = (cc === CC_LEFT) ? -1 : 1;
-            var newIdx = selectedSlice + sliceDir;
-            if (newIdx < 0) newIdx = sliceCount - 1;
-            if (newIdx >= sliceCount) newIdx = 0;
-            selectSlice(newIdx);
-            /* Auto-scroll pad bank if selected slice is outside visible range */
-            if (selectedSlice < slicePadOffset) {
-                slicePadOffset = Math.floor(selectedSlice / 32) * 32;
-            } else if (selectedSlice >= slicePadOffset + 32) {
-                slicePadOffset = Math.floor(selectedSlice / 32) * 32;
+            if (shiftHeld) {
+                /* Shift+Left/Right: move selected slice one position (swap with neighbour) */
+                if (cc === CC_LEFT) {
+                    doSliceMoveLeft();
+                } else {
+                    doSliceMoveRight();
+                }
+            } else {
+                /* Left/Right: select prev/next slice (wraps) */
+                var sliceDir = (cc === CC_LEFT) ? -1 : 1;
+                var newIdx = selectedSlice + sliceDir;
+                if (newIdx < 0) newIdx = sliceCount - 1;
+                if (newIdx >= sliceCount) newIdx = 0;
+                selectSlice(newIdx);
+                /* Auto-scroll pad bank if selected slice is outside visible range */
+                if (selectedSlice < slicePadOffset) {
+                    slicePadOffset = Math.floor(selectedSlice / 32) * 32;
+                } else if (selectedSlice >= slicePadOffset + 32) {
+                    slicePadOffset = Math.floor(selectedSlice / 32) * 32;
+                }
+                syncMarkersToDs();
+                updateSlicePadLeds();
+                announce("Slice " + (selectedSlice + 1) + "/" + sliceCount);
             }
-            syncMarkersToDs();
-            updateSlicePadLeds();
-            announce("Slice " + (selectedSlice + 1) + "/" + sliceCount);
         }
         return;
     }
