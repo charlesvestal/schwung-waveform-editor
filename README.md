@@ -53,11 +53,11 @@ cd move-anything-waveform-editor
 
 | Control | Function |
 |---------|----------|
-| Jog wheel | Scroll view when zoomed in (Shift: fine scroll) |
+| Jog wheel | Scroll view when zoomed in |
 | Jog click | Edit menu: Copy, Cut, Truncate, Normalize Sel, BPM Step, Mute |
 | Shift+Jog click | Paste/Export menu: Paste (insert), Paste (overwrite), Export |
-| Knob 1 | Move start marker |
-| Knob 2 | Move end marker |
+| Knob 1 | Move start marker (Shift: fine movement) |
+| Knob 2 | Move end marker (Shift: fine movement) |
 | Knob 3 | Zoom |
 | Knob 4 | Vertical scale |
 | Knob 5 | Gain (Shift: normalize) |
