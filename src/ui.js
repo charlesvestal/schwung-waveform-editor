@@ -569,9 +569,9 @@ function updateLeds() {
     setLED(STEP_BASE + 1, isBpm   ? LightGrey : DarkGrey);
     setLED(STEP_BASE + 2, isSlice ? OrangeRed : DarkGrey);
 
-    /* Step 15/16: marker-set LEDs (Trim/BPM only) */
+    /* Step 15/16: marker-set LEDs (Trim/BPM), shuffle LED (Slice) */
     setLED(STEP_BASE + 14, (isTrim || isBpm) ? BrightGreen : Black);
-    setLED(STEP_BASE + 15, (isTrim || isBpm) ? BrightRed   : Black);
+    setLED(STEP_BASE + 15, (isTrim || isBpm) ? BrightRed : isSlice ? BrightRed : Black);
 }
 
 /* ============ Helpers ============ */
@@ -2698,6 +2698,55 @@ function doSliceMoveLeft() {
 }
 
 /**
+ * Shuffle all slices into a random order (Fisher-Yates).
+ * For each position i, picks a random source j >= i and moves it
+ * into place using repeated cut+paste (same mechanism as doSliceMoveLeft).
+ */
+function doSliceShuffle() {
+    if (sliceCount < 2) { showStatus("Need 2+ slices", 30); return; }
+    for (var i = 0; i < sliceCount - 1; i++) {
+        var j = i + Math.floor(Math.random() * (sliceCount - i));
+        /* Move slice j leftward to position i */
+        for (var k = j; k > i; k--) {
+            /* Cut slice at position k */
+            var sliceStart  = sliceBoundaries[k];
+            var sliceEnd    = sliceBoundaries[k + 1];
+            var insertPoint = sliceBoundaries[k - 1];
+            startSample = sliceStart;
+            endSample   = sliceEnd;
+            syncMarkersToDs();
+            if (typeof host_module_set_param_blocking === "function") {
+                host_module_set_param_blocking("cut", "1", 5000);
+            } else {
+                host_module_set_param("cut", "1");
+                host_module_get_param("dirty");
+            }
+            hasClipboard = true;
+            refreshFileInfo();
+            startSample = insertPoint;
+            syncMarkersToDs();
+            host_module_get_param("dirty");
+            if (typeof host_module_set_param_blocking === "function") {
+                host_module_set_param_blocking("paste", "1", 5000);
+            } else {
+                host_module_set_param("paste", "1");
+                host_module_get_param("dirty");
+            }
+            refreshFileInfo();
+        }
+    }
+    refreshState();
+    selectedSlice = 0;
+    selectSlice(0);
+    slicePadOffset = 0;
+    syncMarkersToDs();
+    invalidateWaveform();
+    updateSlicePadLeds();
+    showStatus("Shuffled " + sliceCount + " slices", 60);
+    announce("Shuffled " + sliceCount + " slices");
+}
+
+/**
  * Save As — prompt for filename, copy file to permanent location.
  * Opens the text entry keyboard with a pre-filled timestamp name.
  */
@@ -4185,6 +4234,12 @@ function handleNote(note, velocity) {
             statusTimer = 0;
             statusMsg = "";
         }
+    }
+
+    /* Step 16: shuffle slices (Slice view only) */
+    if (velocity > 0 && note === STEP_BASE + 15 && currentView === VIEW_SLICE) {
+        doSliceShuffle();
+        return;
     }
 
     /* Step 15/16: set start/end marker at playback position */

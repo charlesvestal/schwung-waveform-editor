@@ -148,6 +148,8 @@
         "Down: split slice",
         "Up: merge with prev",
         "",
+        "Step 16: shuffle all",
+        "  slices randomly",
         "Copy: copy slice",
         "Shift+Copy: paste",
         "  insert before slice",

@@ -122,6 +122,7 @@ cd move-anything-waveform-editor
 | Copy | Copy selected slice to clipboard |
 | Shift+Copy | Paste clipboard insert before selected slice |
 | Remove | Cut selected slice (copy + remove from file) |
+| Step 16 | Shuffle all slices randomly |
 | Pads | Audition slice (hold) |
 | Sample | Save slices / Drum Preset / REX Loop (if installed) |
 | Shift+Capture | Export current selection to new file |
