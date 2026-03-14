@@ -175,6 +175,11 @@
         "  stop. File loads",
         "  into editor.",
         "",
+        "Shift+REC: pause",
+        "  recording. Press REC",
+        "  to resume. You can",
+        "  leave and return.",
+        "",
         "Back: cancel and",
         "  return to browser"
       ]
@@ -197,7 +202,8 @@
         "  module installed)",
         "",
         "Saved files go to",
-        "  UserLibrary/Recordings",
+        "  Samples/Move Everything",
+        "  /Recordings",
         "",
         "Back: hide (keeps DSP",
         "  alive). Close Session",
