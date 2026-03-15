@@ -1307,7 +1307,7 @@ function drawTrimView() {
 
     /* Paused state: frozen waveform + PAUSED indicator */
     if (recordState === "paused") {
-        var elapsed = (Date.now() - recordStartTime - recordPausedTotal - (Date.now() - recordPauseStart)) / 1000;
+        var elapsed = (recordPauseStart - recordStartTime - recordPausedTotal) / 1000;
         var mins = Math.floor(elapsed / 60);
         var secs = elapsed % 60;
         var timeStr = mins + ":" + (secs < 10 ? "0" : "") + secs.toFixed(1);
@@ -1337,8 +1337,7 @@ function drawTrimView() {
                 draw_line(x, WAVE_MID - h, x, WAVE_MID + h, 1);
             }
 
-            /* Blinking write head cursor */
-            recordLedCounter++;
+            /* Blinking write head cursor (counter driven by tick()) */
             if (recordLedCounter % 30 < 15) {
                 draw_line(headX, WAVE_Y_TOP, headX, WAVE_Y_BOT, 1);
             }
@@ -3829,8 +3828,6 @@ globalThis.init = function() {
             recordState = "paused";
             recordFilePath = SCRATCH_PATH;
             openedFilePath = SCRATCH_PATH;
-            recordPauseStart = Date.now();
-            recordPausedTotal = 0;
             recordLedCounter = 0;
             currentView = VIEW_TRIM;
             selectedField = 0;
@@ -3842,6 +3839,10 @@ globalThis.init = function() {
             }
             var pausedElapsed = pausedSamples / 44100;
             recordStartTime = Date.now() - (pausedElapsed * 1000);
+            recordPauseStart = Date.now();
+            /* pausedTotal covers the gap between reconstructed start and now,
+               minus actual recorded time, so elapsed stays correct after resume */
+            recordPausedTotal = Date.now() - recordStartTime - (pausedElapsed * 1000);
 
             /* Reconstruct waveform with placeholder entries */
             var pausedTicks = Math.round(pausedElapsed * 1000 / 16);
