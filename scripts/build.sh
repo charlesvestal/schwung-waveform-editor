@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Wave Edit module for Move Anything
+# Build Wave Edit module for Schwung
 #
 # Cross-compiles the DSP plugin and packages all files for release.
 set -e

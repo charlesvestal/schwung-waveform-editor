@@ -308,7 +308,12 @@ function generateDefaultSaveName() {
 }
 
 function isScratchFile() {
-    return openedFilePath === SCRATCH_PATH;
+    if (openedFilePath === SCRATCH_PATH) return true;
+    /* Also treat as scratch if file path contains the scratch filename —
+     * on reconnect, openedFilePath may come from the host and not match
+     * SCRATCH_PATH exactly, and isRecordedFile is lost across reconnects */
+    if (openedFilePath.indexOf(".wave-edit-scratch") >= 0) return true;
+    return false;
 }
 
 function nameMatchesCurrent() {
@@ -769,7 +774,7 @@ function refreshFileInfo() {
     try {
         var info = JSON.parse(raw);
         fileName = info.name || "";
-        if (isScratchFile()) fileName = "New Recording";
+        if (isScratchFile() || fileName.indexOf(".wave-edit-scratch") >= 0) fileName = "New Recording";
         fileDuration = info.duration || 0;
         totalFrames = info.frames || 0;
         startSample = info.start || 0;
@@ -2119,8 +2124,12 @@ function saveSelect() {
             returnToSaveView();
         });
     } else if (action === "REX Loop") {
-        exportRexLoop(saveName);
-        returnToSaveView();
+        checkOverwriteThenDo(function() {
+            var path = ensureSourceSaved();
+            if (!path) { showStatus("Save failed", 60); returnToSaveView(); return; }
+            exportRexLoop(saveName);
+            returnToSaveView();
+        });
     } else {
         /* Cancel */
         returnToSaveView();
@@ -3096,6 +3105,8 @@ function handleCC(cc, value) {
             saveName = isScratchFile()
                 ? generateDefaultSaveName()
                 : fileName.replace(/\.wav$/i, "");
+            /* Never use a hidden dot-prefix name */
+            if (saveName.charAt(0) === ".") saveName = generateDefaultSaveName();
             saveActions = ["Save", "Cancel"];
             saveIndex = 0;
             saveReturnView = currentView;
@@ -3104,6 +3115,8 @@ function handleCC(cc, value) {
             saveName = isScratchFile()
                 ? generateDefaultSaveName()
                 : fileName.replace(/\.wav$/i, "");
+            /* Never use a hidden dot-prefix name */
+            if (saveName.charAt(0) === ".") saveName = generateDefaultSaveName();
             saveActions = getSliceActions();
             saveIndex = 0;
             saveReturnView = VIEW_SLICE;
@@ -3438,6 +3451,8 @@ function handleCC(cc, value) {
                         announce(oDirName + ", " + oFirst);
                     } else if (result.action === "select") {
                         openedFilePath = result.value;
+                        recordState = "idle";
+                        isRecordedFile = false;
                         loadFileIntoEditor(result.value);
                         openFileBrowserState = null;
                         announce("Loaded " + fileName);
@@ -3853,8 +3868,8 @@ globalThis.init = function() {
             recordWriteHead = recordWaveform.length;
 
             announce("Wave Edit, recording paused");
-        } else if (openedFilePath && totalFrames === 0) {
-            /* File path set but no audio data — restore record-ready state */
+        } else if (openedFilePath && totalFrames === 0 && !host_file_exists(openedFilePath)) {
+            /* File path set but no audio data and file doesn't exist — record-ready */
             recordBrowserDir = SCRATCH_DIR;
             recordFilePath = SCRATCH_PATH;
             recordState = "ready";
@@ -3883,8 +3898,8 @@ globalThis.init = function() {
         selectedField = 0;
         host_module_set_param("mode", "0");
 
-        if (openedFilePath && totalFrames === 0) {
-            /* New file — use scratch path for recording */
+        if (openedFilePath && totalFrames === 0 && !host_file_exists(openedFilePath)) {
+            /* Truly new file (doesn't exist on disk) — enter record mode */
             if (typeof host_ensure_dir === "function") {
                 host_ensure_dir(SCRATCH_DIR);
             }
@@ -3893,6 +3908,10 @@ globalThis.init = function() {
             recordState = "ready";
             recordLedCounter = 0;
             announce("New Recording, press REC to record");
+        } else if (openedFilePath && totalFrames === 0) {
+            /* File exists but DSP hasn't loaded yet — retry load */
+            loadFileIntoEditor(openedFilePath);
+            announce("Wave Edit, " + (fileName || "loading") + ", " + formatTime(totalFrames));
         } else {
             announce("Wave Edit, " + (fileName || "no file") + ", " + formatTime(totalFrames));
         }

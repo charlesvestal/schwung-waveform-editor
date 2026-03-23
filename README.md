@@ -1,4 +1,4 @@
-# Wave Edit for Move Everything
+# Wave Edit for Schwung
 
 A full-featured audio waveform editor for your Ableton Move. Trim, gain adjust, normalize, copy/paste, and mute sections of WAV files directly on the device.
 
@@ -14,14 +14,14 @@ A full-featured audio waveform editor for your Ableton Move. Trim, gain adjust, 
 
 ## Prerequisites
 
-- [Move Everything](https://github.com/charlesvestal/move-everything) installed on your Ableton Move
+- [Schwung](https://github.com/charlesvestal/schwung) installed on your Ableton Move
 - SSH access enabled: http://move.local/development/ssh
 
 ## Install
 
 ### Via Module Store (Recommended)
 
-1. Launch Move Everything on your Move
+1. Launch Schwung on your Move
 2. Select **Module Store** from the main menu
 3. Navigate to **Tools** > **Wave Edit**
 4. Select **Install**
@@ -29,8 +29,8 @@ A full-featured audio waveform editor for your Ableton Move. Trim, gain adjust, 
 ### Build from Source
 
 ```bash
-git clone https://github.com/charlesvestal/move-everything-waveform-editor
-cd move-anything-waveform-editor
+git clone https://github.com/charlesvestal/schwung-waveform-editor
+cd schwung-waveform-editor
 ./scripts/build.sh
 ./scripts/install.sh
 ```
@@ -63,7 +63,7 @@ cd move-anything-waveform-editor
 
 ## Credits
 
-- **Move Everything framework**: [Charles Vestal](https://github.com/charlesvestal/move-everything)
+- **Schwung framework**: [Charles Vestal](https://github.com/charlesvestal/schwung)
 
 ## License
 
@@ -71,7 +71,7 @@ MIT License — See [LICENSE](LICENSE)
 
 ## AI Assistance Disclaimer
 
-This module is part of Move Everything and was developed with AI assistance, including Claude, Codex, and other AI assistants.
+This module is part of Schwung and was developed with AI assistance, including Claude, Codex, and other AI assistants.
 
 All architecture, implementation, and release decisions are reviewed by human maintainers.
 AI-assisted content may still contain errors, so please validate functionality, security, and license compatibility before production use.

@@ -2,7 +2,7 @@
  * Waveform Editor DSP Plugin
  *
  * Provides WAV file loading, playback, trimming, gain adjustment,
- * normalization, and waveform visualization for the Move Everything
+ * normalization, and waveform visualization for Schwung
  * waveform editor tool.
  *
  * V2 API only - instance-based for multi-instance support.
