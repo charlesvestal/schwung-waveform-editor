@@ -18,6 +18,10 @@
 #include <unistd.h>
 #include <pwd.h>
 
+#include "rex_parser.h"
+#include "rex_writer.h"
+#include "dwop_encode.h"
+
 /* ============================================================================
  * Plugin API definitions (inlined to avoid path issues during cross-compile)
  * ============================================================================ */
@@ -62,6 +66,9 @@ typedef struct plugin_api_v2 {
 
 /* Samples per frame (stereo interleaved) */
 #define SAMPLES_PER_FRAME 2
+
+#define REX_MAX_EXPORT_SLICES 256
+#define MAX_REX_FILE_SIZE (50 * 1024 * 1024)
 
 /* ============================================================================
  * Instance structure
@@ -111,6 +118,21 @@ typedef struct {
     char load_error[256];
     char module_dir[512];
     char slice_state[2048];     /* JSON blob for UI slice state persistence across reconnect */
+
+    /* REX file support */
+    int is_rex;
+    int rex_slice_count;
+    int rex_slices[REX_MAX_SLICES * 2];      /* pairs of [offset, length] in frames */
+    int rex_orig_slices[REX_MAX_SLICES * 2];  /* original positions for REX mode restore */
+    int rex_orig_slice_count;
+    float rex_tempo;
+    int rex_bars;
+    int rex_beats;
+    int rex_time_sig_num;
+    int rex_time_sig_den;
+    int rex_orig_sample_rate;
+    int rex_orig_channels;
+    int confirm_overwrite;
 } instance_t;
 
 /* ============================================================================
@@ -546,6 +568,481 @@ static int write_wav(const char *path, const int16_t *data, int num_frames,
 }
 
 /* ============================================================================
+ * Resampling utilities
+ * ============================================================================ */
+
+/* Standard cubic interpolation */
+static float cubic_interp(float y0, float y1, float y2, float y3, float frac) {
+    float a0 = y3 - y2 - y0 + y1;
+    float a1 = y0 - y1 - a0;
+    float a2 = y2 - y0;
+    float a3 = y1;
+    return a0 * frac * frac * frac + a1 * frac * frac + a2 * frac + a3;
+}
+
+/*
+ * Resample stereo interleaved int16 audio from src_rate to dst_rate
+ * using cubic interpolation. Caller must free *out_data.
+ * Returns new frame count, or 0 on error.
+ */
+static int resample_audio(const int16_t *in_data, int in_frames,
+                          int src_rate, int dst_rate, int16_t **out_data) {
+    if (!in_data || in_frames <= 0 || src_rate <= 0 || dst_rate <= 0 || !out_data) {
+        return 0;
+    }
+
+    if (src_rate == dst_rate) {
+        /* No resampling needed — just copy */
+        size_t buf_size = (size_t)in_frames * SAMPLES_PER_FRAME * sizeof(int16_t);
+        *out_data = (int16_t *)malloc(buf_size);
+        if (!*out_data) return 0;
+        memcpy(*out_data, in_data, buf_size);
+        return in_frames;
+    }
+
+    double ratio = (double)dst_rate / (double)src_rate;
+    int out_frames = (int)((double)in_frames * ratio);
+    if (out_frames <= 0) return 0;
+    if (out_frames > MAX_AUDIO_FRAMES) out_frames = MAX_AUDIO_FRAMES;
+
+    size_t buf_size = (size_t)out_frames * SAMPLES_PER_FRAME * sizeof(int16_t);
+    *out_data = (int16_t *)malloc(buf_size);
+    if (!*out_data) return 0;
+
+    {
+        double step = (double)src_rate / (double)dst_rate;
+        int i;
+        for (i = 0; i < out_frames; i++) {
+            double src_pos = (double)i * step;
+            int idx = (int)src_pos;
+            float frac = (float)(src_pos - (double)idx);
+            int ch;
+
+            for (ch = 0; ch < 2; ch++) {
+                int i0 = (idx - 1 >= 0) ? idx - 1 : 0;
+                int i1 = idx;
+                int i2 = (idx + 1 < in_frames) ? idx + 1 : in_frames - 1;
+                int i3 = (idx + 2 < in_frames) ? idx + 2 : in_frames - 1;
+
+                float y0 = (float)in_data[i0 * 2 + ch];
+                float y1 = (float)in_data[i1 * 2 + ch];
+                float y2 = (float)in_data[i2 * 2 + ch];
+                float y3 = (float)in_data[i3 * 2 + ch];
+
+                float val = cubic_interp(y0, y1, y2, y3, frac);
+                if (val > 32767.0f) val = 32767.0f;
+                if (val < -32768.0f) val = -32768.0f;
+                (*out_data)[i * 2 + ch] = (int16_t)val;
+            }
+        }
+    }
+
+    return out_frames;
+}
+
+/* ============================================================================
+ * REX file loading
+ * ============================================================================ */
+
+/*
+ * Load a REX file into the instance.
+ * Returns 0 on success, -1 on error.
+ */
+static int load_rex(instance_t *inst, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        snprintf(inst->load_error, sizeof(inst->load_error),
+                 "Cannot open REX file: %s", path);
+        plugin_log(inst->load_error);
+        return -1;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size <= 0 || file_size > MAX_REX_FILE_SIZE) {
+        snprintf(inst->load_error, sizeof(inst->load_error),
+                 "REX file size invalid: %ld bytes (max %d)",
+                 file_size, MAX_REX_FILE_SIZE);
+        plugin_log(inst->load_error);
+        fclose(f);
+        return -1;
+    }
+
+    uint8_t *file_data = (uint8_t *)malloc((size_t)file_size);
+    if (!file_data) {
+        snprintf(inst->load_error, sizeof(inst->load_error),
+                 "Out of memory reading REX file (%ld bytes)", file_size);
+        plugin_log(inst->load_error);
+        fclose(f);
+        return -1;
+    }
+
+    size_t bytes_read = fread(file_data, 1, (size_t)file_size, f);
+    fclose(f);
+
+    if ((long)bytes_read != file_size) {
+        snprintf(inst->load_error, sizeof(inst->load_error),
+                 "REX short read: expected %ld, got %zu", file_size, bytes_read);
+        plugin_log(inst->load_error);
+        free(file_data);
+        return -1;
+    }
+
+    /* Parse REX file */
+    rex_file_t rex;
+    memset(&rex, 0, sizeof(rex));
+    if (rex_parse(&rex, file_data, (size_t)file_size) != 0) {
+        snprintf(inst->load_error, sizeof(inst->load_error),
+                 "REX parse error: %s", rex.error);
+        plugin_log(inst->load_error);
+        rex_free(&rex);
+        free(file_data);
+        return -1;
+    }
+    free(file_data);
+
+    if (!rex.pcm_data || rex.pcm_samples <= 0) {
+        snprintf(inst->load_error, sizeof(inst->load_error),
+                 "REX file contains no audio data");
+        plugin_log(inst->load_error);
+        rex_free(&rex);
+        return -1;
+    }
+
+    /* Convert to stereo interleaved if mono */
+    int16_t *stereo_data = NULL;
+    int pcm_frames = rex.pcm_samples;
+
+    if (rex.pcm_channels == 1) {
+        stereo_data = (int16_t *)malloc((size_t)pcm_frames * SAMPLES_PER_FRAME * sizeof(int16_t));
+        if (!stereo_data) {
+            snprintf(inst->load_error, sizeof(inst->load_error),
+                     "Out of memory converting REX mono to stereo");
+            plugin_log(inst->load_error);
+            rex_free(&rex);
+            return -1;
+        }
+        {
+            int i;
+            for (i = 0; i < pcm_frames; i++) {
+                stereo_data[i * 2]     = rex.pcm_data[i];
+                stereo_data[i * 2 + 1] = rex.pcm_data[i];
+            }
+        }
+    } else {
+        /* Already stereo interleaved — take ownership by copying */
+        stereo_data = (int16_t *)malloc((size_t)pcm_frames * SAMPLES_PER_FRAME * sizeof(int16_t));
+        if (!stereo_data) {
+            snprintf(inst->load_error, sizeof(inst->load_error),
+                     "Out of memory copying REX stereo data");
+            plugin_log(inst->load_error);
+            rex_free(&rex);
+            return -1;
+        }
+        memcpy(stereo_data, rex.pcm_data, (size_t)pcm_frames * SAMPLES_PER_FRAME * sizeof(int16_t));
+    }
+
+    /* Resample if needed */
+    double sr_ratio = 1.0;
+    int16_t *final_data = stereo_data;
+    int final_frames = pcm_frames;
+
+    if (rex.sample_rate != MOVE_SAMPLE_RATE) {
+        int16_t *resampled = NULL;
+        int resampled_frames = resample_audio(stereo_data, pcm_frames,
+                                              rex.sample_rate, MOVE_SAMPLE_RATE,
+                                              &resampled);
+        if (resampled_frames <= 0 || !resampled) {
+            snprintf(inst->load_error, sizeof(inst->load_error),
+                     "Failed to resample REX from %d to %d Hz",
+                     rex.sample_rate, MOVE_SAMPLE_RATE);
+            plugin_log(inst->load_error);
+            free(stereo_data);
+            rex_free(&rex);
+            return -1;
+        }
+        sr_ratio = (double)MOVE_SAMPLE_RATE / (double)rex.sample_rate;
+        free(stereo_data);
+        final_data = resampled;
+        final_frames = resampled_frames;
+    }
+
+    if (final_frames > MAX_AUDIO_FRAMES) {
+        snprintf(inst->load_error, sizeof(inst->load_error),
+                 "REX file too long: %d frames (max %d)", final_frames, MAX_AUDIO_FRAMES);
+        plugin_log(inst->load_error);
+        free(final_data);
+        rex_free(&rex);
+        return -1;
+    }
+
+    /* Free old audio data */
+    if (inst->audio_data) {
+        free(inst->audio_data);
+        inst->audio_data = NULL;
+    }
+    if (inst->undo_buffer) {
+        free(inst->undo_buffer);
+        inst->undo_buffer = NULL;
+    }
+
+    /* Update instance state */
+    inst->audio_data = final_data;
+    inst->audio_frames = final_frames;
+    inst->undo_buffer = NULL;
+    inst->undo_frames = 0;
+    inst->has_undo = 0;
+    inst->dirty = 0;
+
+    inst->sample_rate = MOVE_SAMPLE_RATE;
+    inst->channels = 2;
+    inst->total_frames = final_frames;
+    inst->orig_format = 1;    /* PCM */
+    inst->orig_bits = 16;
+    inst->orig_channels = (uint16_t)rex.pcm_channels;
+    inst->duration_secs = (float)final_frames / (float)MOVE_SAMPLE_RATE;
+
+    inst->start_sample = 0;
+    inst->end_sample = final_frames;
+    inst->zoom_level = 0;
+    inst->zoom_center = final_frames / 2;
+
+    inst->playing = 0;
+    inst->play_pos = 0;
+    inst->gain_db = 0.0f;
+    inst->mode = 0;
+
+    inst->load_error[0] = '\0';
+    inst->copy_result[0] = '\0';
+
+    /* REX-specific state */
+    inst->is_rex = 1;
+    inst->rex_tempo = rex.tempo_bpm;
+    inst->rex_bars = rex.bars;
+    inst->rex_beats = rex.beats;
+    inst->rex_time_sig_num = rex.time_sig_num;
+    inst->rex_time_sig_den = rex.time_sig_den;
+    inst->rex_orig_sample_rate = rex.sample_rate;
+    inst->rex_orig_channels = rex.pcm_channels;
+
+    /* Convert and store slice data */
+    {
+        int sc = rex.slice_count;
+        int i;
+        if (sc > REX_MAX_SLICES) sc = REX_MAX_SLICES;
+        inst->rex_slice_count = sc;
+        inst->rex_orig_slice_count = sc;
+
+        for (i = 0; i < sc; i++) {
+            int off = (int)((double)rex.slices[i].sample_offset * sr_ratio);
+            int len = (int)((double)rex.slices[i].sample_length * sr_ratio);
+
+            /* Clamp to buffer bounds */
+            if (off < 0) off = 0;
+            if (off > final_frames) off = final_frames;
+            if (off + len > final_frames) len = final_frames - off;
+            if (len < 0) len = 0;
+
+            inst->rex_slices[i * 2]     = off;
+            inst->rex_slices[i * 2 + 1] = len;
+            inst->rex_orig_slices[i * 2]     = off;
+            inst->rex_orig_slices[i * 2 + 1] = len;
+        }
+    }
+
+    rex_free(&rex);
+
+    {
+        char log_buf[256];
+        snprintf(log_buf, sizeof(log_buf),
+                 "Loaded REX: %d frames, %d Hz -> %d Hz, %d slices, %.1f BPM",
+                 final_frames, inst->rex_orig_sample_rate, MOVE_SAMPLE_RATE,
+                 inst->rex_slice_count, inst->rex_tempo);
+        plugin_log(log_buf);
+    }
+
+    return 0;
+}
+
+/* ============================================================================
+ * REX file writing
+ * ============================================================================ */
+
+/*
+ * Write a REX file from the instance audio data with given slice boundaries.
+ * slice_boundaries: array of frame offsets defining slice starts.
+ * num_boundaries: number of entries in slice_boundaries.
+ * Returns 0 on success, -1 on error.
+ */
+static int write_rex_file(instance_t *inst, const char *path,
+                          const int *slice_boundaries, int num_boundaries) {
+    if (!inst || !path || !inst->audio_data || inst->audio_frames <= 0) return -1;
+
+    /* Determine export rate */
+    int export_rate = (inst->rex_orig_sample_rate > 0) ? inst->rex_orig_sample_rate : MOVE_SAMPLE_RATE;
+    int export_channels = (inst->rex_orig_channels == 1) ? 1 : 2;
+
+    int16_t *export_data = inst->audio_data;
+    int export_frames = inst->audio_frames;
+    int need_free_export = 0;
+    double inv_sr_ratio = 1.0;
+
+    /* Resample back if needed */
+    if (export_rate != MOVE_SAMPLE_RATE) {
+        int16_t *resampled = NULL;
+        int resampled_frames = resample_audio(inst->audio_data, inst->audio_frames,
+                                              MOVE_SAMPLE_RATE, export_rate,
+                                              &resampled);
+        if (resampled_frames <= 0 || !resampled) {
+            plugin_log("write_rex_file: resample failed");
+            return -1;
+        }
+        inv_sr_ratio = (double)export_rate / (double)MOVE_SAMPLE_RATE;
+        export_data = resampled;
+        export_frames = resampled_frames;
+        need_free_export = 1;
+    }
+
+    /* Down-mix to mono if original was mono (just use L channel) */
+    int16_t *final_data = export_data;
+    int need_free_final = 0;
+
+    if (export_channels == 1) {
+        final_data = (int16_t *)malloc((size_t)export_frames * sizeof(int16_t));
+        if (!final_data) {
+            plugin_log("write_rex_file: mono alloc failed");
+            if (need_free_export) free(export_data);
+            return -1;
+        }
+        need_free_final = 1;
+        {
+            int i;
+            for (i = 0; i < export_frames; i++) {
+                final_data[i] = export_data[i * 2]; /* L channel */
+            }
+        }
+    }
+
+    /* Build slice array from boundaries */
+    rex_write_slice_t write_slices[REX_MAX_EXPORT_SLICES];
+    int num_slices = 0;
+
+    if (num_boundaries >= 2) {
+        int i;
+        for (i = 0; i < num_boundaries - 1 && num_slices < REX_MAX_EXPORT_SLICES; i++) {
+            int off = slice_boundaries[i];
+            int next = slice_boundaries[i + 1];
+
+            /* Adjust for rate conversion */
+            if (inv_sr_ratio != 1.0) {
+                off = (int)((double)off * inv_sr_ratio);
+                next = (int)((double)next * inv_sr_ratio);
+            }
+
+            /* Clamp */
+            if (off < 0) off = 0;
+            if (off > export_frames) off = export_frames;
+            if (next < 0) next = 0;
+            if (next > export_frames) next = export_frames;
+
+            {
+                int len = next - off;
+                if (len <= 0) continue;
+
+                write_slices[num_slices].sample_offset = (uint32_t)off;
+                write_slices[num_slices].sample_length = (uint32_t)len;
+                num_slices++;
+            }
+        }
+    }
+
+    /* Set up write params */
+    {
+        rex_write_params_t params;
+        int out_cap;
+        uint8_t *out_buf;
+        int written;
+
+        memset(&params, 0, sizeof(params));
+        params.tempo_bpm = inst->rex_tempo;
+        params.bars = inst->rex_bars;
+        params.beats = inst->rex_beats;
+        params.time_sig_num = inst->rex_time_sig_num;
+        params.time_sig_den = inst->rex_time_sig_den;
+        params.sample_rate = export_rate;
+        params.channels = export_channels;
+        params.pcm_data = (export_channels == 1) ? final_data : export_data;
+        params.num_frames = export_frames;
+        params.slice_count = num_slices;
+        params.slices = write_slices;
+
+        /* Allocate output buffer */
+        out_cap = export_frames * export_channels * 3 + 1024;
+        out_buf = (uint8_t *)malloc((size_t)out_cap);
+        if (!out_buf) {
+            plugin_log("write_rex_file: output buffer alloc failed");
+            if (need_free_final) free(final_data);
+            if (need_free_export) free(export_data);
+            return -1;
+        }
+
+        written = rex_write(&params, out_buf, out_cap);
+        if (written <= 0) {
+            plugin_log("write_rex_file: rex_write failed");
+            free(out_buf);
+            if (need_free_final) free(final_data);
+            if (need_free_export) free(export_data);
+            return -1;
+        }
+
+        /* Write to file */
+        {
+            FILE *f = fopen(path, "wb");
+            if (!f) {
+                char log_buf[256];
+                snprintf(log_buf, sizeof(log_buf),
+                         "write_rex_file: cannot open %s for writing", path);
+                plugin_log(log_buf);
+                free(out_buf);
+                if (need_free_final) free(final_data);
+                if (need_free_export) free(export_data);
+                return -1;
+            }
+            {
+                size_t nw = fwrite(out_buf, 1, (size_t)written, f);
+                fclose(f);
+                if ((int)nw != written) {
+                    plugin_log("write_rex_file: short write");
+                    free(out_buf);
+                    if (need_free_final) free(final_data);
+                    if (need_free_export) free(export_data);
+                    return -1;
+                }
+            }
+        }
+
+        free(out_buf);
+    }
+
+    if (need_free_final) free(final_data);
+    if (need_free_export) free(export_data);
+
+    chown_to_ableton(path);
+
+    {
+        char log_buf[256];
+        snprintf(log_buf, sizeof(log_buf),
+                 "Wrote REX: %s (%d frames, %d Hz, %d slices)",
+                 path, export_frames, export_rate, num_slices);
+        plugin_log(log_buf);
+    }
+
+    return 0;
+}
+
+/* ============================================================================
  * Waveform computation
  * ============================================================================ */
 
@@ -830,12 +1327,36 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
         /* Stop any playback */
         inst->playing = 0;
 
-        /* Load the file */
-        if (load_wav(inst, val) == 0) {
-            /* Compute initial waveform and peak */
-            compute_waveform(inst, 128);
-            inst->peak_db = compute_peak_db(inst->audio_data,
-                                            inst->audio_frames);
+        /* Reset REX state */
+        inst->is_rex = 0;
+        inst->rex_slice_count = 0;
+        inst->rex_orig_slice_count = 0;
+        inst->confirm_overwrite = 0;
+
+        /* Probe first 4 bytes to detect REX (IFF "CAT ") vs WAV */
+        {
+            int load_ok = -1;
+            FILE *probe = fopen(val, "rb");
+            if (probe) {
+                uint8_t magic[4] = {0};
+                size_t nr = fread(magic, 1, 4, probe);
+                fclose(probe);
+                if (nr == 4 && memcmp(magic, "CAT ", 4) == 0) {
+                    load_ok = load_rex(inst, val);
+                } else {
+                    load_ok = load_wav(inst, val);
+                }
+            } else {
+                snprintf(inst->load_error, sizeof(inst->load_error),
+                         "Cannot open file: %s", val);
+                plugin_log(inst->load_error);
+            }
+
+            if (load_ok == 0) {
+                compute_waveform(inst, 128);
+                inst->peak_db = compute_peak_db(inst->audio_data,
+                                                inst->audio_frames);
+            }
         }
         return;
     }
@@ -1481,6 +2002,22 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
             return;
         }
 
+        /* If REX file or file already exists, request confirmation */
+        if (inst->is_rex) {
+            inst->confirm_overwrite = 1;
+            plugin_log("Save: REX file, requesting overwrite confirmation");
+            return;
+        }
+        {
+            FILE *check = fopen(inst->file_path, "rb");
+            if (check) {
+                fclose(check);
+                inst->confirm_overwrite = 1;
+                plugin_log("Save: file exists, requesting overwrite confirmation");
+                return;
+            }
+        }
+
         if (write_wav(inst->file_path, inst->audio_data, inst->audio_frames,
                       inst->sample_rate, inst->orig_format, inst->orig_bits,
                       inst->orig_channels) == 0) {
@@ -1488,6 +2025,241 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
             plugin_log("File saved");
         } else {
             plugin_log("Save failed");
+        }
+        return;
+    }
+
+    if (strcmp(key, "save_confirm") == 0) {
+        inst->confirm_overwrite = 0;
+        if (!inst->audio_data || inst->audio_frames <= 0) return;
+        if (inst->file_path[0] == '\0') return;
+
+        if (inst->is_rex) {
+            /* REX save using val for boundaries */
+            int boundaries[REX_MAX_EXPORT_SLICES];
+            int num_b = 0;
+
+            if (val && val[0] != '\0') {
+                const char *p = val;
+                while (*p && num_b < REX_MAX_EXPORT_SLICES) {
+                    boundaries[num_b++] = atoi(p);
+                    while (*p && *p != ',') p++;
+                    if (*p == ',') p++;
+                }
+            }
+
+            /* Fall back to stored rex_slices if no valid boundaries */
+            if (num_b < 2) {
+                int i;
+                num_b = 0;
+                for (i = 0; i < inst->rex_slice_count && num_b < REX_MAX_EXPORT_SLICES; i++) {
+                    boundaries[num_b++] = inst->rex_slices[i * 2];
+                }
+                /* Add end boundary */
+                if (inst->rex_slice_count > 0 && num_b < REX_MAX_EXPORT_SLICES) {
+                    int last = inst->rex_slice_count - 1;
+                    boundaries[num_b++] = inst->rex_slices[last * 2] + inst->rex_slices[last * 2 + 1];
+                }
+            }
+
+            if (write_rex_file(inst, inst->file_path, boundaries, num_b) == 0) {
+                inst->dirty = 0;
+                plugin_log("REX file saved (confirmed)");
+            } else {
+                plugin_log("REX save failed");
+            }
+        } else {
+            if (write_wav(inst->file_path, inst->audio_data, inst->audio_frames,
+                          inst->sample_rate, inst->orig_format, inst->orig_bits,
+                          inst->orig_channels) == 0) {
+                inst->dirty = 0;
+                plugin_log("File saved (confirmed)");
+            } else {
+                plugin_log("Save failed");
+            }
+        }
+        return;
+    }
+
+    if (strcmp(key, "save_cancel") == 0) {
+        inst->confirm_overwrite = 0;
+        return;
+    }
+
+    if (strcmp(key, "save_rex") == 0) {
+        if (!inst->audio_data || inst->audio_frames <= 0) return;
+        if (inst->file_path[0] == '\0') return;
+
+        /* Check if file exists */
+        {
+            FILE *check = fopen(inst->file_path, "rb");
+            if (check) {
+                fclose(check);
+                inst->confirm_overwrite = 1;
+                plugin_log("save_rex: file exists, requesting confirmation");
+                return;
+            }
+        }
+
+        /* Parse boundaries from val */
+        {
+            int boundaries[REX_MAX_EXPORT_SLICES];
+            int num_b = 0;
+
+            if (val && val[0] != '\0') {
+                const char *p = val;
+                while (*p && num_b < REX_MAX_EXPORT_SLICES) {
+                    boundaries[num_b++] = atoi(p);
+                    while (*p && *p != ',') p++;
+                    if (*p == ',') p++;
+                }
+            }
+
+            /* Fall back to stored rex_slices */
+            if (num_b < 2) {
+                int i;
+                num_b = 0;
+                for (i = 0; i < inst->rex_slice_count && num_b < REX_MAX_EXPORT_SLICES; i++) {
+                    boundaries[num_b++] = inst->rex_slices[i * 2];
+                }
+                if (inst->rex_slice_count > 0 && num_b < REX_MAX_EXPORT_SLICES) {
+                    int last = inst->rex_slice_count - 1;
+                    boundaries[num_b++] = inst->rex_slices[last * 2] + inst->rex_slices[last * 2 + 1];
+                }
+            }
+
+            if (write_rex_file(inst, inst->file_path, boundaries, num_b) == 0) {
+                inst->dirty = 0;
+                plugin_log("REX file saved");
+            } else {
+                plugin_log("REX save failed");
+            }
+        }
+        return;
+    }
+
+    if (strcmp(key, "save_rex_confirm") == 0) {
+        inst->confirm_overwrite = 0;
+        if (!inst->audio_data || inst->audio_frames <= 0) return;
+        if (inst->file_path[0] == '\0') return;
+
+        {
+            int boundaries[REX_MAX_EXPORT_SLICES];
+            int num_b = 0;
+
+            if (val && val[0] != '\0') {
+                const char *p = val;
+                while (*p && num_b < REX_MAX_EXPORT_SLICES) {
+                    boundaries[num_b++] = atoi(p);
+                    while (*p && *p != ',') p++;
+                    if (*p == ',') p++;
+                }
+            }
+
+            if (num_b < 2) {
+                int i;
+                num_b = 0;
+                for (i = 0; i < inst->rex_slice_count && num_b < REX_MAX_EXPORT_SLICES; i++) {
+                    boundaries[num_b++] = inst->rex_slices[i * 2];
+                }
+                if (inst->rex_slice_count > 0 && num_b < REX_MAX_EXPORT_SLICES) {
+                    int last = inst->rex_slice_count - 1;
+                    boundaries[num_b++] = inst->rex_slices[last * 2] + inst->rex_slices[last * 2 + 1];
+                }
+            }
+
+            if (write_rex_file(inst, inst->file_path, boundaries, num_b) == 0) {
+                inst->dirty = 0;
+                plugin_log("REX file saved (confirmed)");
+            } else {
+                plugin_log("REX save failed");
+            }
+        }
+        return;
+    }
+
+    if (strcmp(key, "save_rex_as") == 0) {
+        /* val = "path|b0,b1,...,bN" */
+        if (!inst->audio_data || inst->audio_frames <= 0 || !val || val[0] == '\0') {
+            plugin_log("save_rex_as: no audio or no path");
+            return;
+        }
+
+        {
+            char save_path[512];
+            const char *pipe = strchr(val, '|');
+            int boundaries[REX_MAX_EXPORT_SLICES];
+            int num_b = 0;
+
+            if (pipe) {
+                int path_len = (int)(pipe - val);
+                if (path_len >= (int)sizeof(save_path)) path_len = (int)sizeof(save_path) - 1;
+                memcpy(save_path, val, (size_t)path_len);
+                save_path[path_len] = '\0';
+
+                /* Parse boundaries after pipe */
+                {
+                    const char *p = pipe + 1;
+                    while (*p && num_b < REX_MAX_EXPORT_SLICES) {
+                        boundaries[num_b++] = atoi(p);
+                        while (*p && *p != ',') p++;
+                        if (*p == ',') p++;
+                    }
+                }
+            } else {
+                strncpy(save_path, val, sizeof(save_path) - 1);
+                save_path[sizeof(save_path) - 1] = '\0';
+            }
+
+            /* Fall back to stored slices */
+            if (num_b < 2) {
+                int i;
+                num_b = 0;
+                for (i = 0; i < inst->rex_slice_count && num_b < REX_MAX_EXPORT_SLICES; i++) {
+                    boundaries[num_b++] = inst->rex_slices[i * 2];
+                }
+                if (inst->rex_slice_count > 0 && num_b < REX_MAX_EXPORT_SLICES) {
+                    int last = inst->rex_slice_count - 1;
+                    boundaries[num_b++] = inst->rex_slices[last * 2] + inst->rex_slices[last * 2 + 1];
+                }
+            }
+
+            if (write_rex_file(inst, save_path, boundaries, num_b) == 0) {
+                char log_buf[256];
+                snprintf(log_buf, sizeof(log_buf), "REX saved to: %s", save_path);
+                plugin_log(log_buf);
+            } else {
+                plugin_log("save_rex_as failed");
+            }
+        }
+        return;
+    }
+
+    if (strcmp(key, "update_rex_slices") == 0) {
+        /* val = "offset,length;offset,length;..." */
+        if (!val || val[0] == '\0') return;
+
+        {
+            int count = 0;
+            const char *p = val;
+
+            while (*p && count < REX_MAX_SLICES) {
+                int off = 0, len = 0;
+                if (sscanf(p, "%d,%d", &off, &len) == 2) {
+                    /* Skip slices outside audio bounds */
+                    if (off >= 0 && off < inst->audio_frames && len > 0) {
+                        if (off + len > inst->audio_frames) len = inst->audio_frames - off;
+                        inst->rex_slices[count * 2]     = off;
+                        inst->rex_slices[count * 2 + 1] = len;
+                        count++;
+                    }
+                }
+                /* Advance to next semicolon or end */
+                while (*p && *p != ';') p++;
+                if (*p == ';') p++;
+            }
+
+            inst->rex_slice_count = count;
         }
         return;
     }
@@ -1789,6 +2561,67 @@ static int v2_get_param(void *instance, const char *key, char *buf,
 
     if (strcmp(key, "sample_rate") == 0) {
         int n = snprintf(buf, (size_t)buf_len, "%d", inst->sample_rate);
+        return (n >= 0 && n < buf_len) ? n : -1;
+    }
+
+    if (strcmp(key, "rex_info") == 0) {
+        if (!inst->is_rex) {
+            int n = snprintf(buf, (size_t)buf_len, "{}");
+            return (n >= 0 && n < buf_len) ? n : -1;
+        }
+        {
+            int n = snprintf(buf, (size_t)buf_len,
+                             "{\"is_rex\":1,\"tempo\":%.1f,\"bars\":%d,"
+                             "\"beats\":%d,\"time_sig_num\":%d,"
+                             "\"time_sig_den\":%d,\"slice_count\":%d,"
+                             "\"orig_sample_rate\":%d}",
+                             inst->rex_tempo, inst->rex_bars,
+                             inst->rex_beats, inst->rex_time_sig_num,
+                             inst->rex_time_sig_den, inst->rex_slice_count,
+                             inst->rex_orig_sample_rate);
+            return (n >= 0 && n < buf_len) ? n : -1;
+        }
+    }
+
+    if (strcmp(key, "rex_slices") == 0) {
+        if (!inst->is_rex || inst->rex_slice_count <= 0) {
+            int n = snprintf(buf, (size_t)buf_len, "[]");
+            return (n >= 0 && n < buf_len) ? n : -1;
+        }
+        {
+            int pos = 0;
+            int remaining = buf_len - 1;
+            int i;
+
+            if (remaining < 1) return -1;
+            buf[pos++] = '[';
+            remaining--;
+
+            for (i = 0; i < inst->rex_slice_count; i++) {
+                int n = snprintf(buf + pos, (size_t)remaining,
+                                 "%s[%d,%d]",
+                                 (i > 0) ? "," : "",
+                                 inst->rex_slices[i * 2],
+                                 inst->rex_slices[i * 2 + 1]);
+                if (n < 0 || n >= remaining) {
+                    buf[pos] = ']';
+                    buf[pos + 1] = '\0';
+                    return pos + 1;
+                }
+                pos += n;
+                remaining -= n;
+            }
+
+            if (remaining >= 1) {
+                buf[pos++] = ']';
+            }
+            buf[pos] = '\0';
+            return pos;
+        }
+    }
+
+    if (strcmp(key, "confirm_overwrite") == 0) {
+        int n = snprintf(buf, (size_t)buf_len, "%d", inst->confirm_overwrite ? 1 : 0);
         return (n >= 0 && n < buf_len) ? n : -1;
     }
 

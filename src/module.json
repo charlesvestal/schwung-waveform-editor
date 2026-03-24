@@ -1,8 +1,8 @@
 {
     "id": "waveform-editor",
     "name": "Wave Edit",
-    "version": "0.6.1",
-    "description": "Trim, gain adjust, and edit audio files on the Move",
+    "version": "0.7.0",
+    "description": "Trim, gain adjust, and edit audio and REX loop files on the Move",
     "author": "Schwung",
     "dsp": "dsp.so",
     "api_version": 2,
@@ -10,7 +10,7 @@
     "tool_config": {
         "interactive": true,
         "command": null,
-        "input_extensions": [".wav"],
+        "input_extensions": [".wav", ".rx2", ".rex", ".rcy"],
         "allow_new_file": true
     }
 }

@@ -191,6 +191,7 @@ var loopSelectedField = 0;
 var SLICE_MODE_EVEN = 0;
 var SLICE_MODE_AUTO = 1;
 var SLICE_MODE_LAZY = 2;
+var SLICE_MODE_REX = 3;
 var sliceMode = SLICE_MODE_EVEN;
 
 /* Lazy chop sub-modes */
@@ -347,7 +348,12 @@ function isRexAvailable() {
 }
 
 function getSliceActions() {
-    if (isRexAvailable()) {
+    var rexInfoRaw = host_module_get_param("rex_info");
+    var isRex = false;
+    if (rexInfoRaw) {
+        try { isRex = JSON.parse(rexInfoRaw).is_rex === 1; } catch(e) {}
+    }
+    if (isRex || isRexAvailable()) {
         return ["Slices", "Drum Preset", "REX Loop", "Cancel"];
     }
     return ["Slices", "Drum Preset", "Cancel"];
@@ -520,6 +526,23 @@ function formatTime(samples) {
     if (totalFrames <= 0) return "0.000s";
     var secs = samples / sampleRate;
     return secs.toFixed(3) + "s";
+}
+
+/**
+ * Get duration display string, appending BPM for REX files.
+ */
+function getDurationDisplay() {
+    var dur = fileDuration > 0 ? fileDuration.toFixed(1) + "s" : "";
+    var rexInfoRaw = host_module_get_param("rex_info");
+    if (rexInfoRaw) {
+        try {
+            var ri = JSON.parse(rexInfoRaw);
+            if (ri.is_rex && ri.tempo > 0) {
+                dur += " " + ri.tempo.toFixed(0) + "bpm";
+            }
+        } catch(e) {}
+    }
+    return dur;
 }
 
 /**
@@ -823,7 +846,7 @@ function refreshWaveform() {
  */
 function loadFileIntoEditor(filePath) {
     if (typeof host_module_set_param_blocking === "function") {
-        host_module_set_param_blocking("file_path", filePath, 2000);
+        host_module_set_param_blocking("file_path", filePath, 10000);
     } else {
         host_module_set_param("file_path", filePath);
     }
@@ -832,6 +855,35 @@ function loadFileIntoEditor(filePath) {
     waveformDirty = true;
     refreshWaveform();
     refreshState();
+
+    /* Check if loaded file has REX slice data */
+    var rexInfoRaw = host_module_get_param("rex_info");
+    if (rexInfoRaw) {
+        try {
+            var rexInfo = JSON.parse(rexInfoRaw);
+            if (rexInfo.is_rex && rexInfo.slice_count > 0) {
+                var rexSlicesRaw = host_module_get_param("rex_slices");
+                if (rexSlicesRaw) {
+                    var rexSlicePairs = JSON.parse(rexSlicesRaw);
+                    sliceBoundaries = [];
+                    for (var si = 0; si < rexSlicePairs.length; si++) {
+                        sliceBoundaries.push(rexSlicePairs[si][0]);
+                    }
+                    if (rexSlicePairs.length > 0) {
+                        var lastSlice = rexSlicePairs[rexSlicePairs.length - 1];
+                        sliceBoundaries.push(lastSlice[0] + lastSlice[1]);
+                    }
+                    sliceCount = rexSlicePairs.length;
+                    sliceMode = SLICE_MODE_REX;
+                    sliceRegionStart = 0;
+                    sliceRegionEnd = totalFrames;
+                    selectedSlice = 0;
+                    slicePadOffset = 0;
+                    switchView(VIEW_SLICE);
+                }
+            }
+        } catch (e) { /* ignore parse errors */ }
+    }
 }
 
 /**
@@ -917,7 +969,24 @@ function parseWaveformData(raw) {
  * Recompute slice boundaries based on current mode.
  */
 function recomputeSliceBoundaries() {
-    if (sliceMode === SLICE_MODE_LAZY) {
+    if (sliceMode === SLICE_MODE_REX) {
+        /* Restore original REX slice boundaries from DSP */
+        var rexSlicesRaw = host_module_get_param("rex_slices");
+        if (rexSlicesRaw) {
+            try {
+                var rexSlicePairs = JSON.parse(rexSlicesRaw);
+                sliceBoundaries = [];
+                for (var si = 0; si < rexSlicePairs.length; si++) {
+                    sliceBoundaries.push(rexSlicePairs[si][0]);
+                }
+                if (rexSlicePairs.length > 0) {
+                    var lastSlice = rexSlicePairs[rexSlicePairs.length - 1];
+                    sliceBoundaries.push(lastSlice[0] + lastSlice[1]);
+                }
+                sliceCount = rexSlicePairs.length;
+            } catch (e) {}
+        }
+    } else if (sliceMode === SLICE_MODE_LAZY) {
         /* Lazy: keep existing boundaries; init single slice if empty */
         if (sliceBoundaries.length < 2) {
             sliceBoundaries = [sliceRegionStart, sliceRegionEnd];
@@ -1363,7 +1432,7 @@ function drawTrimView() {
     if (maxNameChars < 4) maxNameChars = 4;
     var dispName = truncate(fileName, maxNameChars);
     print(nameX, 0, dispName, 1);
-    var durStr = fileDuration > 0 ? fileDuration.toFixed(1) + "s" : "";
+    var durStr = getDurationDisplay();
     var durX = SCREEN_W - durStr.length * 6;
     print(durX, 0, durStr, 1);
 
@@ -1491,7 +1560,7 @@ function drawLoopView() {
     if (maxNameChars < 4) maxNameChars = 4;
     var dispName = truncate(fileName, maxNameChars);
     print(nameX, 0, dispName, 1);
-    var durStr = fileDuration > 0 ? fileDuration.toFixed(1) + "s" : "";
+    var durStr = getDurationDisplay();
     var durX = SCREEN_W - durStr.length * 6;
     print(durX, 0, durStr, 1);
 
@@ -1572,7 +1641,7 @@ function drawSliceView() {
     if (maxNameChars < 4) maxNameChars = 4;
     var dispName = truncate(fileName, maxNameChars);
     print(nameX, 0, dispName, 1);
-    var durStr = fileDuration > 0 ? fileDuration.toFixed(1) + "s" : "";
+    var durStr = getDurationDisplay();
     var durX = SCREEN_W - durStr.length * 6;
     print(durX, 0, durStr, 1);
 
@@ -1594,7 +1663,7 @@ function drawSliceView() {
         printCentered(54, footerStatus);
     } else {
         /* Build footer items based on slice menu */
-        var modeLabel = sliceMode === SLICE_MODE_EVEN ? "Even" : (sliceMode === SLICE_MODE_AUTO ? "Auto" : "Lazy");
+        var modeLabel = sliceMode === SLICE_MODE_EVEN ? "Even" : (sliceMode === SLICE_MODE_AUTO ? "Auto" : (sliceMode === SLICE_MODE_REX ? "REX" : "Lazy"));
         var countLabel;
         if (sliceMode === SLICE_MODE_LAZY) {
             countLabel = lazySub === LAZY_SUB_CHOP ? "Chop" : "Play";
@@ -1824,6 +1893,7 @@ function switchView(view) {
         var sliceAnnounce = "Slice";
         if (sliceMode === SLICE_MODE_LAZY) sliceAnnounce += " Lazy Chop";
         else if (sliceMode === SLICE_MODE_AUTO) sliceAnnounce += " Auto";
+        else if (sliceMode === SLICE_MODE_REX) sliceAnnounce += " REX";
         announce(sliceAnnounce + ", " + fileName);
     } else if (view === VIEW_MODE_MENU) {
         announce("Menu, " + menuItems[menuIndex]);
@@ -1988,6 +2058,13 @@ function ensureSourceSaved() {
         ? SAVE_DIR
         : openedFilePath.substring(0, openedFilePath.lastIndexOf("/"));
     var destPath = destDir + "/" + targetName;
+
+    /* Check if source is REX — save preserves format */
+    var rexInfoRaw = host_module_get_param("rex_info");
+    var isRex = false;
+    if (rexInfoRaw) {
+        try { isRex = JSON.parse(rexInfoRaw).is_rex === 1; } catch(e) {}
+    }
     /* In trim/loop view, apply trim if markers don't span the full file */
     if ((saveReturnView === VIEW_TRIM || saveReturnView === VIEW_LOOP) &&
         (startSample > 0 || endSample < totalFrames)) {
@@ -2035,11 +2112,23 @@ function ensureSourceSaved() {
         return destPath;
     }
     /* Same name, same path — save in place with sync barrier */
-    if (typeof host_module_set_param_blocking === "function") {
-        host_module_set_param_blocking("save", "1", 10000);
+    if (isRex) {
+        /* REX save with slice boundaries */
+        var boundaryStr = sliceBoundaries.join(",");
+        if (typeof host_module_set_param_blocking === "function") {
+            host_module_set_param_blocking("save_confirm", boundaryStr, 10000);
+        } else {
+            host_module_set_param("save_confirm", boundaryStr);
+            host_module_get_param("dirty");
+        }
     } else {
-        host_module_set_param("save", "1");
-        host_module_get_param("dirty"); /* sync barrier */
+        /* WAV save */
+        if (typeof host_module_set_param_blocking === "function") {
+            host_module_set_param_blocking("save", "1", 10000);
+        } else {
+            host_module_set_param("save", "1");
+            host_module_get_param("dirty"); /* sync barrier */
+        }
     }
     isRecordedFile = false;
     refreshState();
@@ -2519,6 +2608,34 @@ function exportRexLoop(overrideName) {
     }
 
     announce("Exporting REX loop");
+
+    /* If source is already REX, use DSP-native REX writer (no need for rex-encode) */
+    var rexInfoRaw = host_module_get_param("rex_info");
+    var isSourceRex = false;
+    if (rexInfoRaw) {
+        try { isSourceRex = JSON.parse(rexInfoRaw).is_rex === 1; } catch(e) {}
+    }
+    if (isSourceRex) {
+        var baseName = overrideName
+            ? overrideName.replace(/\.(wav|rx2|rex|rcy)$/i, "")
+            : fileName.replace(/\.(wav|rx2|rex|rcy)$/i, "");
+        var rx2Path = REX_LOOPS_DIR + "/" + baseName + ".rx2";
+        if (typeof host_ensure_dir === "function") {
+            host_ensure_dir(REX_LOOPS_DIR);
+        }
+        var boundaryStr = sliceBoundaries.join(",");
+        var saveParam = rx2Path + "|" + boundaryStr;
+        if (typeof host_module_set_param_blocking === "function") {
+            host_module_set_param_blocking("save_rex_as", saveParam, 10000);
+        } else {
+            host_module_set_param("save_rex_as", saveParam);
+            host_module_get_param("dirty");
+        }
+        var rexFolder = leafFolder(rx2Path);
+        showStatus("Saved REX to " + rexFolder, 90);
+        announce("Saved REX loop to " + rexFolder);
+        return;
+    }
 
     /* First, export the full slice region as a WAV file for rex-encode input */
     var savedStart = startSample;
@@ -3104,7 +3221,7 @@ function handleCC(cc, value) {
         if (currentView === VIEW_TRIM || currentView === VIEW_LOOP) {
             saveName = isScratchFile()
                 ? generateDefaultSaveName()
-                : fileName.replace(/\.wav$/i, "");
+                : fileName.replace(/\.(wav|rx2|rex|rcy)$/i, "");
             /* Never use a hidden dot-prefix name */
             if (saveName.charAt(0) === ".") saveName = generateDefaultSaveName();
             saveActions = ["Save", "Cancel"];
@@ -3114,7 +3231,7 @@ function handleCC(cc, value) {
         } else if (currentView === VIEW_SLICE) {
             saveName = isScratchFile()
                 ? generateDefaultSaveName()
-                : fileName.replace(/\.wav$/i, "");
+                : fileName.replace(/\.(wav|rx2|rex|rcy)$/i, "");
             /* Never use a hidden dot-prefix name */
             if (saveName.charAt(0) === ".") saveName = generateDefaultSaveName();
             saveActions = getSliceActions();
@@ -3304,9 +3421,19 @@ function handleCC(cc, value) {
                         if (delta > 0) {
                             if (sliceMode === SLICE_MODE_EVEN) sliceMode = SLICE_MODE_AUTO;
                             else if (sliceMode === SLICE_MODE_AUTO) sliceMode = SLICE_MODE_LAZY;
+                            else if (sliceMode === SLICE_MODE_LAZY) {
+                                var ri = null;
+                                try { ri = JSON.parse(host_module_get_param("rex_info") || "{}"); } catch(e) {}
+                                sliceMode = (ri && ri.is_rex) ? SLICE_MODE_REX : SLICE_MODE_EVEN;
+                            }
                             else sliceMode = SLICE_MODE_EVEN;
                         } else {
-                            if (sliceMode === SLICE_MODE_EVEN) sliceMode = SLICE_MODE_LAZY;
+                            if (sliceMode === SLICE_MODE_EVEN) {
+                                var ri = null;
+                                try { ri = JSON.parse(host_module_get_param("rex_info") || "{}"); } catch(e) {}
+                                sliceMode = (ri && ri.is_rex) ? SLICE_MODE_REX : SLICE_MODE_LAZY;
+                            }
+                            else if (sliceMode === SLICE_MODE_REX) sliceMode = SLICE_MODE_LAZY;
                             else if (sliceMode === SLICE_MODE_LAZY) sliceMode = SLICE_MODE_AUTO;
                             else sliceMode = SLICE_MODE_EVEN;
                         }
@@ -3323,7 +3450,7 @@ function handleCC(cc, value) {
                         selectSlice(0);
                         syncMarkersToDs();
                         updateSlicePadLeds();
-                        var modeAnnounce = sliceMode === SLICE_MODE_LAZY ? "Lazy, press Pad 1" : (sliceMode === SLICE_MODE_AUTO ? "Auto" : "Even");
+                        var modeAnnounce = sliceMode === SLICE_MODE_LAZY ? "Lazy, press Pad 1" : (sliceMode === SLICE_MODE_AUTO ? "Auto" : (sliceMode === SLICE_MODE_REX ? "REX" : "Even"));
                         announce(modeAnnounce);
                     } else if (sliceMenuIndex === 1) {
                         if (sliceMode === SLICE_MODE_LAZY) {
