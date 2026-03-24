@@ -17,15 +17,15 @@ echo "=== Installing Wave Edit Module ==="
 
 # Deploy to Move - tools subdirectory
 echo "Copying module to Move..."
-ssh ableton@move.local "mkdir -p /data/UserData/move-anything/modules/tools/$MODULE_ID"
-scp -r dist/$MODULE_ID/* ableton@move.local:/data/UserData/move-anything/modules/tools/$MODULE_ID/
+ssh ableton@move.local "mkdir -p /data/UserData/schwung/modules/tools/$MODULE_ID"
+scp -r dist/$MODULE_ID/* ableton@move.local:/data/UserData/schwung/modules/tools/$MODULE_ID/
 
 # Set permissions
 echo "Setting permissions..."
-ssh ableton@move.local "chmod -R a+rw /data/UserData/move-anything/modules/tools/$MODULE_ID"
+ssh ableton@move.local "chmod -R a+rw /data/UserData/schwung/modules/tools/$MODULE_ID"
 
 echo ""
 echo "=== Install Complete ==="
-echo "Module installed to: /data/UserData/move-anything/modules/tools/$MODULE_ID/"
+echo "Module installed to: /data/UserData/schwung/modules/tools/$MODULE_ID/"
 echo ""
 echo "Restart Schwung to load the new module."

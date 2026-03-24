@@ -47,24 +47,24 @@ import {
     MoveKnob5Touch, MoveKnob7Touch, MoveKnob8Touch,
     White, Black, DarkGrey, LightGrey, BrightRed, DeepRed,
     WhiteLedOff, WhiteLedDim, WhiteLedMedium, WhiteLedBright
-} from '/data/UserData/move-anything/shared/constants.mjs';
+} from '/data/UserData/schwung/shared/constants.mjs';
 
 import {
     setLED, setButtonLED, decodeDelta
-} from '/data/UserData/move-anything/shared/input_filter.mjs';
+} from '/data/UserData/schwung/shared/input_filter.mjs';
 
 import {
     buildFilepathBrowserState,
     refreshFilepathBrowser,
     moveFilepathBrowserSelection,
     activateFilepathBrowserItem
-} from '/data/UserData/move-anything/shared/filepath_browser.mjs';
+} from '/data/UserData/schwung/shared/filepath_browser.mjs';
 
 import {
     announce
-} from '/data/UserData/move-anything/shared/screen_reader.mjs';
+} from '/data/UserData/schwung/shared/screen_reader.mjs';
 
-import { log as uniLog } from '/data/UserData/move-anything/shared/logger.mjs';
+import { log as uniLog } from '/data/UserData/schwung/shared/logger.mjs';
 function debugLog(msg) { uniLog("WaveEdit", msg); }
 
 /* ============ Constants ============ */
@@ -228,7 +228,7 @@ var recordWriteHead = 0;         /* Current write position in recordWaveform */
 var RECORD_SCROLL_X = Math.floor(SCREEN_W * 0.90); /* Write head sticks here once reached */
 
 /* REX encoder detection */
-var REX_MODULE_PATH = "/data/UserData/move-anything/modules/sound_generators/rex";
+var REX_MODULE_PATH = "/data/UserData/schwung/modules/sound_generators/rex";
 var REX_ENCODE_BIN = REX_MODULE_PATH + "/rex-encode";
 var REX_LOOPS_DIR = REX_MODULE_PATH + "/loops";
 
