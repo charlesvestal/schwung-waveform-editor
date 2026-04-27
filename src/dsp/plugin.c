@@ -2002,20 +2002,12 @@ static void v2_set_param(void *instance, const char *key, const char *val) {
             return;
         }
 
-        /* If REX file or file already exists, request confirmation */
+        /* REX still routes through save_confirm (needs slice boundaries).
+         * WAV in-place save overwrites directly — UI already gated on overwrite. */
         if (inst->is_rex) {
             inst->confirm_overwrite = 1;
             plugin_log("Save: REX file, requesting overwrite confirmation");
             return;
-        }
-        {
-            FILE *check = fopen(inst->file_path, "rb");
-            if (check) {
-                fclose(check);
-                inst->confirm_overwrite = 1;
-                plugin_log("Save: file exists, requesting overwrite confirmation");
-                return;
-            }
         }
 
         if (write_wav(inst->file_path, inst->audio_data, inst->audio_frames,
