@@ -1,7 +1,7 @@
 {
     "id": "waveform-editor",
     "name": "Wave Edit",
-    "version": "0.7.0",
+    "version": "0.7.1",
     "description": "Trim, gain adjust, and edit audio and REX loop files on the Move",
     "author": "Schwung",
     "dsp": "dsp.so",
