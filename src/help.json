@@ -127,8 +127,10 @@
         "  Lazy (real-time",
         "  chop, SP-2400 style)",
         "  REX (original slice",
-        "  points from REX file,",
-        "  only when REX loaded)",
+        "  points from a REX",
+        "  file,",
+        "  only with a REX",
+        "  file loaded)",
         "",
         "Pads: select + play",
         "  slice (hold to",
@@ -137,7 +139,8 @@
         "  slice",
         "Down: split slice at",
         "  midpoint",
-        "Up: merge with previous",
+        "Up: merge with the",
+        "previous",
         "  slice",
         "Shift+Up/Down: scroll",
         "  pad banks (>32)"
@@ -162,15 +165,18 @@
         "  chopping is done.",
         "",
         "Jog on Count toggles",
-        "  Chop / Play sub-mode."
+        "  Chop / Play sub-",
+        "  mode."
       ]
     },
     {
       "title": "Recording",
       "lines": [
         "Open File browser:",
-        "  select New Recording",
-        "  to create a new file",
+        "  select New",
+        "  Recording",
+        "  to create a new",
+        "  file",
         "",
         "Records Move's audio",
         "  output (resample).",
@@ -183,7 +189,8 @@
         "  into editor.",
         "",
         "Shift+REC: pause",
-        "  recording. Press REC",
+        "  recording. Press",
+        "  REC",
         "  to resume. You can",
         "  leave and return.",
         "",
@@ -194,8 +201,10 @@
     {
       "title": "Saving",
       "lines": [
-        "Sample: open save menu",
-        "  with editable filename",
+        "Sample: open the save",
+        "menu",
+        "  with an editable",
+        "  filename",
         "  and save action",
         "",
         "Shift+Capture: export",
